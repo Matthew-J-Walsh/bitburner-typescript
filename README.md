@@ -1,10 +1,14 @@
+# This is Matthew Walsh's version
+
+Yay!
+
 # Typescript template for Bitburner's Remote File API
 
 The official template for synchronizing Typescript/Javascript from your computer to the game.
 
 [Step by step install](BeginnersGuide.md)
 
-[Docker install guide](DockerGuide.md) (optional) 
+[Docker install guide](DockerGuide.md) (optional)
 
 [Learn more about Typescript](https://www.typescriptlang.org/docs/)
 
@@ -24,6 +28,7 @@ Alternatively see [Docker install guide](DockerGuide.md) (optional) that install
 ## Quick start
 
 Download the template to your computer and install everything it requires:
+
 ```
 git clone https://github.com/bitburner-official/typescript-template
 cd typescript-template
@@ -45,6 +50,7 @@ in the Remote API section of the game settings, and press the connect button.
 Alternatively see [Docker install guide](DockerGuide.md) (optional) that installs nodejs and the Remote File API in an isolated container.
 
 ## Advanced
+
 ### Imports
 
 To ensure both the game and typescript have no issues with import paths, your import statements should follow a few formatting rules:
@@ -58,19 +64,19 @@ To ensure both the game and typescript have no issues with import paths, your im
 To import `helperFunction` from the file `helpers.ts` located in the directory `src/lib/`:
 
 ```js
-import { helperFunction } from "lib/helpers";
+import { helperFunction } from 'lib/helpers';
 ```
 
 To import all functions from the file `helpers.ts` located in the `src/lib/` directory as the namespace `helpers`:
 
 ```js
-import * as helpers from "lib/helpers";
+import * as helpers from 'lib/helpers';
 ```
 
 To import `someFunction` from the file `main.ts` located in the `src/` directory:
 
 ```js
-import { someFunction } from "main";
+import { someFunction } from 'main';
 ```
 
 ### Debugging
@@ -78,7 +84,8 @@ import { someFunction } from "main";
 For debugging bitburner on Steam you will need to enable a remote debugging port. This can be done by rightclicking bitburner in your Steam library and selecting properties. There you need to add `--remote-debugging-port=9222` [Thanks @DarkMio]
 
 ### Using React
-Some `ns` functions, like [`ns.printRaw()`](https://github.com/bitburner-official/bitburner-src/blob/dev/markdown/bitburner.ns.printraw.md) allows you to render React components into the game interface. 
+
+Some `ns` functions, like [`ns.printRaw()`](https://github.com/bitburner-official/bitburner-src/blob/dev/markdown/bitburner.ns.printraw.md) allows you to render React components into the game interface.
 
 The game already exposes the `React` and `ReactDOM` objects globally, but in order to work with strongly typed versions in `.ts` files, you can use the included typings. To do this, use the following import:
 
