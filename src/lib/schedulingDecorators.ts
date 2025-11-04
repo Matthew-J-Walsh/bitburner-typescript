@@ -1,8 +1,8 @@
 import { NS } from '@ns';
-import { PriorityTask, BackgroundTask } from 'scheduler';
-import { ModuleConstructor, BaseModule } from 'baseModule';
+import { PriorityTask, BackgroundTask } from '/lib/scheduler';
+import { ModuleConstructor, BaseModule } from '/lib/baseModule';
 
-export const registeredModules: ModuleConstructor[] = [];
+export const trackedProperties = new WeakMap<BaseModule, string[]>();
 export const registeredPriorityTasks = new WeakMap<BaseModule, string[]>();
 export const priorityTasks: PriorityTask[] = [];
 export const registeredBackgroundTasks = new WeakMap<
@@ -12,18 +12,17 @@ export const registeredBackgroundTasks = new WeakMap<
 export const backgroundTasks: BackgroundTask[] = [];
 
 /**
- * Adds a task to the priority scheduler. Such tasks should always the time of their next call in milliseconds
+ * Adds a task to the priority scheduler.
+ * Such tasks should always return the time of their next call
  */
-export function PriorityTask() {
-    return function (
-        target: BaseModule,
-        propertyKey: string,
-        descriptor: PropertyDescriptor,
-    ) {
-        const existing = registeredPriorityTasks.get(target) ?? [];
-        existing.push(propertyKey);
-        registeredPriorityTasks.set(target, existing);
-    };
+export function PriorityTask(
+    target: BaseModule,
+    propertyKey: string,
+    descriptor: PropertyDescriptor,
+) {
+    const existing = registeredPriorityTasks.get(target) ?? [];
+    existing.push(propertyKey);
+    registeredPriorityTasks.set(target, existing);
 }
 
 /**
@@ -76,11 +75,19 @@ export function registerBackgroundTaskForModule(module: BaseModule): void {
 }
 
 /**
- * Registers a module into the state, required for module values to populate state for display
+ * Registers a module into the state, required for module values to populate state for display.
+ * If a module with the same name already exists, it will be removed first to prevent duplicates
+ * caused by Bitburner's script reloading behavior.
  */
-export function RegisteredModule(target: any): any {
-    registeredModules.push(target);
-}
+//export function RegisteredModule(target: ModuleConstructor): any {
+//    const previousIndex = registeredModules.findIndex(
+//        (module) => module.name === target.name,
+//    );
+//    if (previousIndex !== -1) {
+//        registeredModules.splice(previousIndex, 1);
+//    }
+//    registeredModules.push(target);
+//}
 
 /**
  * Initializes all the registered modules
@@ -89,3 +96,10 @@ export function RegisteredModule(target: any): any {
 //export async function initalizeModules(ns: NS) {
 //    registeredModules.forEach((module) => state.push(new module(ns)));
 //}
+
+/** Marks a property of a module to be tracked in the state */
+export function TrackProperty(target: BaseModule, propertyKey: string) {
+    const existing = trackedProperties.get(target) ?? [];
+    existing.push(propertyKey);
+    trackedProperties.set(target, existing);
+}

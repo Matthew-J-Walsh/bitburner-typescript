@@ -1,19 +1,23 @@
 import { NS } from '@ns';
 import {
+    TrackProperty,
     BackgroundTask,
     PriorityTask,
-    RegisteredModule,
-} from 'schedulingDecorators';
-import { BaseModule } from 'baseModule';
+} from '/lib/schedulingDecorators';
+import { BaseModule } from '/lib/baseModule';
+import { state } from '/lib/state';
 
-@RegisteredModule
 export class TestingModule extends BaseModule {
+    @TrackProperty
     randomIncrement: number = 0;
+    @TrackProperty
     sharedCounter: number = 0;
+    @TrackProperty
     lastPriorityRun: number = 0;
+    @TrackProperty
     nextPriorityRun: number = 0;
 
-    @PriorityTask()
+    @PriorityTask
     priorityTask() {
         const now = Date.now();
         if (this.lastPriorityRun !== 0) {
@@ -24,7 +28,7 @@ export class TestingModule extends BaseModule {
         this.sharedCounter -= 1;
         const delay = Math.random() * 800 + 200;
         this.nextPriorityRun = now + delay;
-        return delay;
+        return this.nextPriorityRun;
     }
 
     @BackgroundTask(1000)
@@ -45,13 +49,15 @@ export class TestingModule extends BaseModule {
     }
 }
 
-@RegisteredModule
 export class TestingModuleTwo extends BaseModule {
+    @TrackProperty
     sharedCounter: number = 0;
+    @TrackProperty
     lastPriorityRun: number = 0;
+    @TrackProperty
     nextPriorityRun: number = 0;
 
-    @PriorityTask()
+    @PriorityTask
     priorityRandomYield() {
         const now = Date.now();
         if (this.lastPriorityRun !== 0) {
@@ -62,7 +68,7 @@ export class TestingModuleTwo extends BaseModule {
         this.sharedCounter += 1;
         const delay = Math.random() * 1000 + 500;
         this.nextPriorityRun = now + delay;
-        return delay;
+        return this.nextPriorityRun;
     }
 
     @BackgroundTask(2000)
@@ -77,3 +83,10 @@ export class TestingModuleTwo extends BaseModule {
         this.ns.tprint(`Counter divided by 3 to: ${this.sharedCounter}`);
     }
 }
+
+/** ### TestingModule Uniqueness */
+export const testingModule = new TestingModule();
+state.push(testingModule);
+/** ### TestingModuleTwo Uniqueness */
+export const testingModuleTwo = new TestingModuleTwo();
+state.push(testingModule);

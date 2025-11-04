@@ -1,5 +1,5 @@
 import { NS } from '@ns';
-import { Heap } from '/heap';
+import { Heap } from '../lib/heap';
 
 function generateRandomArray(length: number): number[] {
     return Array.from({ length }, () => Math.random() * 1000);

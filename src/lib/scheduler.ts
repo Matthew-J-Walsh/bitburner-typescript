@@ -1,48 +1,30 @@
 import { NS } from '@ns';
-import { Heap } from 'heap';
+import { Heap } from '/lib/heap';
 
 /**
  * Time before another priority task that background tasks are blocked in order to prevent overrun
  */
 const backgroundBlockTime = 200;
 
-/**
- * Scheduled task
- */
+/** Task that should be run with priority */
 export interface PriorityTask {
-    /**
-     * Name of scheduled task
-     */
+    /** Name of scheduled task */
     name: string;
-    /**
-     * Task to run
-     */
+    /** Task to run */
     fn: () => number;
-    /**
-     * Time that the next run should occur '''after'''
-     */
+    /** Time that the next run should occur '''after''' */
     nextRun: number;
 }
 
-/**
- * Scheduled task
- */
+/** Task that should be run in the background */
 export interface BackgroundTask {
-    /**
-     * Name of scheduled task
-     */
+    /** Name of scheduled task */
     name: string;
-    /**
-     * Task to run
-     */
-    fn: () => null;
-    /**
-     * Time that the next run should occur '''after'''
-     */
+    /** Task to run */
+    fn: () => null | number;
+    /** Time that the next run should occur '''after''' */
     nextRun: number;
-    /**
-     * Interval to repeat the task
-     */
+    /** Interval to repeat the task */
     interval: number;
 }
 
@@ -50,13 +32,9 @@ export interface BackgroundTask {
  * Scheduler object. Should only have one instance. Runs the scheduled actions as appropriate
  */
 export class Scheduler {
-    /**
-     * Heap for the priority tasks
-     */
+    /** Heap for the priority tasks */
     priorityQueue: Heap<PriorityTask>;
-    /**
-     * Heap for the background tasks
-     */
+    /** Heap for the background tasks */
     backgroundQueue: Heap<BackgroundTask>;
 
     constructor(
@@ -89,8 +67,7 @@ export class Scheduler {
             if (!task || task.nextRun > now) break;
 
             this.priorityQueue.pop();
-            const delay = task.fn();
-            task.nextRun = now + delay;
+            task.nextRun = task.fn();
             this.priorityQueue.push(task);
         }
 
@@ -102,7 +79,7 @@ export class Scheduler {
             if (!task || task.nextRun > now) break;
 
             this.backgroundQueue.pop();
-            task.fn();
+            task.interval = task.fn() ?? task.interval;
             task.nextRun = now + task.interval;
             this.backgroundQueue.push(task);
         }
@@ -110,19 +87,13 @@ export class Scheduler {
         return this.getNextSleepTime();
     }
 
-    /**
-     * Time of next scheduled priority task.
-     * @returns Time of next scheduled priority task
-     */
+    /** Time of next scheduled priority task */
     nextPriorityTime(): number {
         const next = this.priorityQueue.peek();
         return next ? next.nextRun : Date.now() + 1_000;
     }
 
-    /**
-     * Requested sleep time
-     * @returns Requested sleep time
-     */
+    /** Requested sleep time */
     getNextSleepTime(): number {
         const next = this.nextPriorityTime();
         return Math.max(0, next - Date.now());

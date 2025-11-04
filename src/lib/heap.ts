@@ -61,4 +61,8 @@ export class Heap<T> {
             index = smallest;
         }
     }
+
+    size(): number {
+        return this.heap.length;
+    }
 }

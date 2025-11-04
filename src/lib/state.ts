@@ -1,31 +1,25 @@
 import { NS } from '@ns';
-import { BaseModule } from 'baseModule';
+import { BaseModule } from '/lib/baseModule';
+import { trackedProperties } from '/lib/schedulingDecorators';
 
-/**
- * Full state of all values for display
- */
+/** Full state of all values for display */
 export const state: BaseModule[] = [];
 
 let fieldMap: Map<BaseModule, string[]>;
 
-/**
- * Prepares the fields that should be logged for each module
- */
-export function prepareFieldMap(ns: NS) {
+/** Prepares the fields that should be logged for each module */
+export function prepareStateForLogging(ns: NS) {
     fieldMap = new Map();
 
     state.forEach((module) => {
-        const keys = Object.keys(module).filter(
-            (k) => k !== 'ns' && typeof (module as any)[k] !== 'function',
-        );
+        const keys = trackedProperties.get(Object.getPrototypeOf(module));
+        if (!keys) return;
         fieldMap.set(module, keys);
-        ns.tprint(`${module} has ${keys.length} fields`);
+        ns.tprint(`${module} has ${keys.length} tracked properties`);
     });
 }
 
-/**
- * Extracts current data and appends it to the current storage file
- */
+/** Extracts current data and appends it to the current storage file */
 export function logStateJSONL(ns: NS, filename: string) {
     const snapshot: Record<string, Record<string, any>> = Object.fromEntries(
         state.map((module) => {
@@ -44,9 +38,7 @@ export function logStateJSONL(ns: NS, filename: string) {
     ns.write(filename, JSON.stringify(snapshot) + '\n', 'a');
 }
 
-/**
- * Gets the filename of the next log file
- */
+/** Gets the filename of the next log file */
 export function getNextLogFile(ns: NS): string {
     const folder = '/logs/BN-1-1/';
     const files = ns.ls('home', folder);
