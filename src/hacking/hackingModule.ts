@@ -1,512 +1,699 @@
-import { NS, Server } from '@ns';
+import { NS, Server, RunOptions, ScriptArg, RunningScript } from '@ns';
 import { BackgroundTask, PriorityTask } from '/lib/schedulingDecorators';
 import { BaseModule } from '/lib/baseModule';
 import { state } from '/lib/state';
-import {
-    serverUtilityModule,
-    scriptMapping,
-} from '/hacking/serverUtilityModule';
+import { serverUtilityModule } from '/hacking/serverUtilityModule';
 import {
     hackingUtilityModule,
-    BatchSequencing,
+    HackingPolicy,
+    HackingEvaluator,
 } from '/hacking/hackingUtilityModule';
 import { Heap } from '/lib/heap';
-import { IndexedHeap } from '/lib/indexedHeap';
-
-const startupDelay = 5_000;
-/** Built in delay between batch starts */
-const batchInternalDelay = 200;
-/** Maximum permissible time that a script can end without killing the batch */
-const batchMaximumDelay = 100;
-/** Time to wait if we aren't at minimum security */
-const securityFailureWaitTime = 10;
-
-type HackScript = 'hack' | 'grow' | 'weaken';
+import { SortedArray } from '/lib/sortedArray';
+import { LinkedList } from 'lib/linkedList';
+import { KeyedMinHeap } from '/lib/keyedHeap';
+import {
+    defaultDelay,
+    batchInternalDelay,
+    batchMaximumDelay,
+    securityFailureWaitTime,
+    HackScriptType,
+    hackScriptTypes,
+    ScriptType,
+    HackingScript,
+    scriptMapping,
+} from '/hacking/constants';
 
 /** Element of a hacking batch */
 type HackingElement = {
-    /** Hacking script to use */
-    script: HackScript;
-    /** Threads to make */
-    threads: number;
-    /** Start time, before fired this is an estimate */
-    start: number;
-    /** End time, before fired this is a target */
-    end: number;
-    /** Parent batch */
-    parent: HackingBatch;
-    /** Process id for killing, 0 before firing */
-    pid: number;
+    /** Targeted end time of the element */
+    endTime: number;
+    /** Executor function for the element */
+    exec: (endTime: number) => number;
+    /** Kill function for the element */
+    kill: () => void;
 };
 
 /** A batch of hack scripts */
-type HackingBatch = {
-    /** HackingElements making up the batch */
-    elements: Array<HackingElement>;
+class HackingBatch {
+    /** Pids for scripts under this batch that have started */
+    private controledScripts: Array<number> = [];
     /** If the batch has been killed */
-    killed: boolean;
-};
-
-class HackingTarget {
-    /**
-     * Stage of server. TODO: For the moment we don't support partial stages
-     * @stage=0 Unweakened
-     * @stage=1 Fully Weakened
-     * @stage=2 Fully grown
-     */
-    stage: number = 0;
-    /** When the next batch should be fired off */
-    nextBatchInitializationTime: number = 0;
-    /** Queue of batch elements that need to be scheduled */
-    batchQueue: Heap<HackingElement> = new Heap<HackingElement>(
-        (a, b) => b.start - a.start,
-    );
-    /** Queue of HackingBatches that have been started */
-    activateBatches: Heap<HackingBatch> = new Heap<HackingBatch>(
-        (a, b) => b.elements[0]!.start - a.elements[0]!.start,
-    );
-
+    public killed: boolean = false;
     constructor(
-        private ns: NS,
-        /** Script to fire off a new run */
-        private fire: (script: HackScript, threads: number) => number,
-        /** Script to fire when we needed to cancel a batch */
-        private missRecorder: () => void,
-        /** Target to hack */
-        public target: Server,
-        /** Sequences for every stage */
-        private stagedSequencing: BatchSequencing[],
+        /** Executor function for this batch */
+        public exec: (
+            script: HackScriptType,
+            threads: number,
+            endTime: number,
+        ) => number,
+        /** Kill function to use */
+        public kill: (pid: number) => void,
     ) {}
 
-    public updateStagedSequencing(newSequencing: BatchSequencing[]): void {
-        this.stagedSequencing = newSequencing;
-    }
-
-    /** Checks and potentially updates the current stage */
-    private updateStage(): boolean {
-        if (this.stage === this.stagedSequencing.length) {
-            return false;
-        }
-        if (
-            this.stage === 0 &&
-            this.ns.getServerMinSecurityLevel(this.target.hostname) ===
-                this.ns.getServerSecurityLevel(this.target.hostname)
-        ) {
-            this.stage = 1;
-            return true;
-        }
-        if (
-            this.stage === 1 &&
-            this.ns.getServerMaxMoney(this.target.hostname) ===
-                this.ns.getServerMoneyAvailable(this.target.hostname)
-        ) {
-            this.stage = 2;
-            return true;
-        }
-        return false;
-    }
-
-    /**  Returns if we aren't above minimum security but aren't at stage 0 */
-    private verifyStage1(): boolean {
-        if (
-            this.stage >= 1 &&
-            this.ns.getServerMinSecurityLevel(this.target.hostname) !=
-                this.ns.getServerSecurityLevel(this.target.hostname)
-        ) {
-            return false;
-        }
-        return true;
-    }
-
-    /** Main scheduling operation, responsible for scheduling */
-    schedule(): number {
-        // Update the stage
-        if (this.updateStage()) {
-            if (!this.killAll()) {
-                this.ns.tprint('Fatal error in HackTarget.schedule()');
-                return Date.now() * 2;
-            } else {
-                this.nextBatchInitializationTime = 0;
-            }
-        }
-
-        // Verify security if not fixing security
-        if (!this.verifyStage1()) {
-            return securityFailureWaitTime;
-        }
-
-        const hackTime = this.ns.getHackTime(this.target.hostname);
-        const times = {
-            hack: hackTime,
-            grow: 3.2 * hackTime,
-            weaken: 4 * hackTime,
-        };
-        const currentTime = Date.now();
-
-        // Start new batches
-        if (currentTime >= this.nextBatchInitializationTime) {
-            this.startBatch(currentTime, times);
-        }
-
-        // Update the start times until this.nextBatchInitializationTime
-        const elementsToUpdate = Array<HackingElement>();
-        while (
-            this.batchQueue.size() > 0 &&
-            this.batchQueue.peek()!.start < this.nextBatchInitializationTime
-        ) {
-            if (this.batchQueue.peek()!.parent.killed) {
-                this.batchQueue.pop()!;
-            } else {
-                elementsToUpdate.push(this.batchQueue.pop()!);
-            }
-        }
-        elementsToUpdate.forEach((element) => {
-            element.start = element.end - times[element.script];
-            this.batchQueue.push(element);
-        });
-
-        // Finally we queue what should be
-        while (
-            this.batchQueue.size() > 0 &&
-            this.batchQueue.peek()!.start < currentTime
-        ) {
-            if (this.batchQueue.peek()!.parent.killed) {
-                this.batchQueue.pop()!;
-            } else {
-                const element = this.batchQueue.pop()!;
-                element.start = currentTime;
-                const newEnd = currentTime + times[element.script];
-                if (newEnd <= element.end + batchMaximumDelay) {
-                    element.end = newEnd;
-                    element.pid = this.fire(element.script, element.threads);
-                    if (element.pid) {
-                        element.start = currentTime;
-                    } else {
-                        this.kill(element.parent);
-                        this.missRecorder();
-                    }
-                } else {
-                    this.kill(element.parent);
-                    this.missRecorder();
-                }
-            }
-        }
-
-        // Return when we want to be yielded back to
-        if (
-            this.batchQueue.size() > 0 &&
-            this.batchQueue.peek()!.start < this.nextBatchInitializationTime
-        ) {
-            return this.batchQueue.peek()!.start;
-        } else {
-            return this.nextBatchInitializationTime;
-        }
-    }
-
-    /**
-     * Starts a batch
-     * @param currentTime Date.now()
-     * @param times Up to date times for hack grow and weaken
-     */
-    private startBatch(
+    public init(
         currentTime: number,
         times: { hack: number; grow: number; weaken: number },
-    ) {
-        const startingScript = this.stagedSequencing[this.stage].scripts[0];
-        const success = this.fire(
-            startingScript.script,
-            startingScript.threads,
-        );
-        if (success) {
-            const endTime = currentTime + times[startingScript.script];
+        sequencing: HackingScript[],
+    ): Array<[HackScriptType, HackingElement]> {
+        const endTime = currentTime + times.weaken - 1;
 
-            const batch: HackingBatch = {
-                elements: [],
-                killed: false,
-            };
-            this.stagedSequencing[this.stage].scripts.forEach((element, idx) =>
-                batch.elements.push({
-                    script: element.script,
-                    threads: element.threads,
-                    start:
-                        endTime +
-                        idx * batchInternalDelay -
-                        times[element.script],
-                    end: endTime + idx * batchInternalDelay,
-                    parent: batch,
-                    pid: 0,
-                }),
+        return sequencing.map((hscript, idx) => [
+            hscript.script,
+            {
+                endTime: endTime + idx * batchInternalDelay,
+                exec: (endTime: number) =>
+                    this.start(hscript.script, hscript.threads, endTime),
+                kill: () => this.killAll(),
+            },
+        ]);
+    }
+
+    /**
+     * Helper function to start a sub element
+     * @param script Script to run
+     * @param threads Threads to run
+     * @param endTime Expected end time
+     * @returns pid
+     */
+    private start(
+        script: HackScriptType,
+        threads: number,
+        endTime: number,
+    ): number {
+        if (!this.killed) {
+            return this.controledScripts.push(
+                this.exec(script, threads, endTime),
             );
-            batch.elements[0].pid = success;
-
-            this.activateBatches.push(batch);
         }
+        return 0;
     }
 
-    /**
-     * Kills a targeted batch
-     * @param batch Batch to kill
-     * @returns If sucessful
-     */
-    kill(batch: HackingBatch): boolean {
-        batch.killed = true;
-        return batch.elements.reduce((result, element) => {
-            if (element.pid) {
-                result = result && this.ns.kill(element.pid!);
-            }
-            return result;
-        }, true);
-    }
-
-    /**
-     * Kills all batches under this target
-     * @returns If sucessful
-     */
-    public killAll(): boolean {
-        var result = true;
-        while (this.activateBatches.size() > 0) {
-            result = result && this.kill(this.activateBatches.pop()!);
-        }
-        return result;
-    }
-
-    /**
-     * Attemps to drop at least a specific amount of ram currently in use.
-     * This is considered a miss.
-     * @param requestedRam Amount of ram to free
-     */
-    public dispenseRam(requestedRam: number): boolean {
-        this.missRecorder();
-        return this.killAll(); //TODO: Make this more reasonable XD
+    /** Cancels the run by killing all scripts */
+    public killAll() {
+        this.controledScripts.forEach((pid) => this.kill(pid));
+        this.killed = true;
     }
 }
 
-class InitialHackingTarget extends HackingTarget {
-    schedule(): number {
-        return startupDelay;
+/** Default class for ram task managers (hacking batch creators or fillers) */
+class RamTaskManager {
+    /**
+     * Default primary manage function
+     * @returns Time to be yielded to next
+     */
+    manage(): number {
+        return defaultDelay;
+    }
+
+    /**
+     * Default freeing server method, frees all instances on a server
+     * @param server Server to free
+     * @returns number of threads freed
+     */
+    public freeServer(server: Server): number {
+        return 0;
     }
 }
 
-type FillerScript = {
-    pid: number;
-    threads: number;
-};
-
-class FillerRamTask {
-    /** Scripts currently in managment by this script */
-    managedScripts: Map<string, FillerScript> = new Map();
-    /** Ram per thread of the filler task */
+/** Task that fills some of the Ram up with a spammable script */
+class FillerRamTask extends RamTaskManager {
+    managedScripts: Map<string, number> = new Map<string, number>();
+    managedRam: number = 0;
     ramPerThread: number = 0;
 
     constructor(
-        private ns: NS,
-        private scriptName: string,
+        protected ns: NS,
+        /** Script file this filler will be filling with */
+        protected scriptName: string,
+        /** Method to fill with */
+        protected fill: (threads: number) => number[],
+        /** Method to kill with */
+        protected kill: (pid: number) => void,
+        /** Targeted amount of ram to consume */
+        protected targetRam: number,
     ) {
-        this.ramPerThread = this.ns.getScriptRam(scriptName);
+        super();
+        this.ramPerThread = this.ns.getScriptRam(this.scriptName);
+    }
+
+    /** Updates the targeted ram of this filler */
+    update(targetRam: number) {
+        this.targetRam = targetRam;
     }
 
     /**
-     * Fills a specific amount of ram on a server with.
-     * @param server Server to run it on
-     * @param ramToFill Amount of ram that this may used, assumes that much ram is free
+     * Primary management function
+     * @returns Time to be yielded to next
      */
-    public fill(server: string, ramToFill: number): void {
-        if (this.managedScripts.has(server)) {
-            const old = this.managedScripts.get(server)!;
-            ramToFill += old.threads * this.ramPerThread;
-            this.ns.kill(old.pid);
-            this.managedScripts.delete(server);
-        }
-
-        const threadCount = Math.floor(ramToFill / this.ramPerThread);
-        const newPid = this.ns.exec(this.scriptName, server, threadCount);
-        if (newPid) {
-            this.managedScripts.set(server, {
-                pid: newPid,
-                threads: threadCount,
-            });
-        } else {
-            this.ns.tprint('Potentially fatal error in FillerRamTask.fill()');
-        }
+    manage(): number {
+        const threads = Math.floor(
+            Math.max(0, this.targetRam - this.managedRam) / this.ramPerThread,
+        );
+        this.fill(threads).forEach((pid) => {
+            const runningScript = this.ns.getRunningScript(pid)!; //TODO, we shouldn't need this call
+            this.managedScripts.set(runningScript.server, pid);
+        });
+        return defaultDelay;
     }
 
     /**
      * Kills the filler task on a server
      * @param server Server to kill task on
-     * @returns If successful
+     * @returns Ram Freed
      */
-    public kill(server: string): boolean {
-        if (this.managedScripts.has(server)) {
-            const success = this.ns.kill(this.managedScripts.get(server)!.pid);
-            this.managedScripts.delete(server);
-            return success;
+    freeServer(server: Server): number {
+        if (this.managedScripts.has(server.hostname)) {
+            const ramFreed = this.ns.getRunningScript(
+                this.managedScripts.get(server.hostname),
+            )!;
+            const success = this.kill(
+                this.managedScripts.get(server.hostname)!,
+            );
+            this.managedScripts.delete(server.hostname);
+            return ramFreed.threads;
         } else {
-            return false;
+            return 0;
         }
     }
 }
 
+/** Specific filler for weakens, holds some extra values, refuses to be freed to prevent resets. */
+class WeakenRamTask extends FillerRamTask {
+    constructor(
+        protected ns: NS,
+        /** Method to fill with */
+        protected fill: (threads: number) => number[],
+        /** Method to kill with */
+        protected kill: (pid: number) => void,
+        /** Targeted amount of ram to consume */
+        protected targetRam: number,
+        /** Server target */
+        public target: Server,
+    ) {
+        super(ns, scriptMapping['weaken'], fill, kill, targetRam);
+        this.ramPerThread = this.ns.getScriptRam(this.scriptName);
+    }
+
+    /**
+     * Weakens may not be canceled outside of a killAll()
+     */
+    freeServer(server: Server): number {
+        return 0;
+    }
+
+    /**
+     * Kills script managed, call when target changes or server is fully weakened.
+     */
+    killAll(): void {
+        this.managedScripts.forEach((pid) => {
+            this.kill(pid);
+        });
+        this.managedScripts = new Map<string, number>();
+        this.managedRam = 0;
+    }
+}
+
+/** Task that handles creating new hacking batches */
+class HackingRamTask extends RamTaskManager {
+    /** Next manage time */
+    nextManageTime: number = 0;
+    /** When the next batch should be execed off */
+    nextBatchInitializationTime: number = 0;
+    /** Queues for each script type */
+    scriptQueues: {
+        hack: LinkedList<HackingElement>;
+        grow: LinkedList<HackingElement>;
+        weaken: LinkedList<HackingElement>;
+    } = {
+        hack: new LinkedList<HackingElement>(),
+        grow: new LinkedList<HackingElement>(),
+        weaken: new LinkedList<HackingElement>(),
+    };
+
+    constructor(
+        protected ns: NS,
+        /** Function to exec with */
+        protected exec: (
+            script: HackScriptType,
+            threads: number,
+            endTime: number,
+        ) => number,
+        /** Function to kill with */
+        protected kill: (pid: number) => void,
+        /** Target of hacking */
+        public target: Server,
+        /** Function to exec when we needed to cancel a batch */
+        protected missRecorder: () => void,
+        /** Function that gives us an up to date policy */
+        public getPolicy: () => HackingPolicy,
+        /** Funciton that checks if we are at minimum security */
+        protected checkSecurityLevel: () => boolean,
+        /** Task type metadata */
+        public taskType: string,
+    ) {
+        super();
+    }
+
+    /**
+     * Primary management function
+     * @returns Time to be yielded to next
+     */
+    manage(): number {
+        const currentTime = Date.now();
+        if (currentTime <= this.nextManageTime) {
+            return this.nextManageTime;
+        }
+
+        if (!this.checkSecurityLevel()) {
+            return securityFailureWaitTime;
+        }
+
+        const hackTime = this.ns.getHackTime(this.target.hostname);
+        const scriptTimes = {
+            hack: hackTime,
+            grow: 3.2 * hackTime,
+            weaken: 4 * hackTime,
+        };
+
+        const endTimes = {
+            hack: currentTime + scriptTimes.hack,
+            grow: currentTime + scriptTimes.grow,
+            weaken: currentTime + scriptTimes.weaken,
+        };
+
+        if (currentTime >= this.nextBatchInitializationTime) {
+            const policy = this.getPolicy();
+            this.startBatch(currentTime, scriptTimes, policy.sequence);
+            this.nextBatchInitializationTime = currentTime + policy.spacing;
+        }
+
+        const minTimes = hackScriptTypes.map((script: HackScriptType) => {
+            while (
+                (this.scriptQueues[script].peek()?.endTime ?? Infinity) <=
+                endTimes[script]
+            ) {
+                const elem = this.scriptQueues[script].pop()!;
+                if (elem.endTime + batchMaximumDelay > endTimes[script]) {
+                    elem.exec(endTimes[script]);
+                } else {
+                    elem.kill();
+                    this.missRecorder();
+                }
+            }
+            return (
+                (this.scriptQueues[script].peek()?.endTime ?? Infinity) -
+                scriptTimes[script]
+            );
+        });
+
+        return Math.min(defaultDelay, ...minTimes);
+    }
+
+    /**
+     * Starts a batch
+     * @param currentTime Date.now()
+     * @param scriptTimes Up to date times for hack grow and weaken
+     * @param sequencing Batch sequencing to use
+     */
+    private startBatch(
+        currentTime: number,
+        scriptTimes: { hack: number; grow: number; weaken: number },
+        sequencing: HackingScript[],
+    ) {
+        const batch = new HackingBatch(this.exec, this.kill);
+        batch
+            .init(currentTime, scriptTimes, sequencing)
+            .forEach(([script, element]) =>
+                this.scriptQueues[script].push(element),
+            );
+    }
+}
+
+/** Holds the information needed to determine how much ram a server has in use by priority tasks */
 type RamSpace = {
-    server: Server;
+    /** Server hostname */
+    hostname: string;
+    /** Amount of ram that isn't consumed by a priority task */
     avaiableRam: number;
+    /** Total amount of ram on server */
+    totalRam: number;
 };
 
-class HackingSchedulerModule extends BaseModule {
-    taskList: {
-        0?: HackingTarget;
-        1?: HackingTarget;
-        2?: FillerRamTask;
-    } = {};
-    nextCallTimes: {
-        0: number;
-        1: number;
-    } = {
-        0: Date.now() + startupDelay,
-        1: Date.now() + startupDelay,
-    };
-    priorityRamSpaceUsedMap: {
-        0: IndexedHeap<string, RamSpace>;
-        1: IndexedHeap<string, RamSpace>;
-        2: IndexedHeap<string, RamSpace>;
-    } = {
-        0: new IndexedHeap<string, RamSpace>(
-            (a, b) => b.avaiableRam - a.avaiableRam,
-            (a) => a.server.hostname,
-        ),
-        1: new IndexedHeap<string, RamSpace>(
-            (a, b) => b.avaiableRam - a.avaiableRam,
-            (a) => a.server.hostname,
-        ),
-        2: new IndexedHeap<string, RamSpace>(
-            (a, b) => b.avaiableRam - a.avaiableRam,
-            (a) => a.server.hostname,
-        ),
-    };
+/** Holds the information about an actively running script */
+type ActiveScript = {
+    /** Hostname the script is running on */
+    hostname: string;
+    /** How much ram the script uses */
+    ramUsage: number;
+    /** The expected end time of the script */
+    endTime: number;
+    /** Process id of the script */
+    pid: number;
+};
+
+/** Only submodule of hacking module, handles ram management, provides wrappers to simplify ram management for everything else */
+class RamUsageSubmodule extends BaseModule {
+    /** Datastructure storing how much of each sever's ram is used by priority tasks */
+    priorityRamSpaceUsed: SortedArray<string, RamSpace> = new SortedArray<
+        string,
+        RamSpace
+    >(
+        (item: RamSpace) => item.hostname,
+        (item: RamSpace) => item.avaiableRam,
+    );
+    /** Heap of all timed scripts by end time to remove them from the priority ram space */
+    timedScriptHeap: KeyedMinHeap<number, ActiveScript> = new KeyedMinHeap<
+        number,
+        ActiveScript
+    >(
+        (item: ActiveScript) => item.pid,
+        (item: ActiveScript) => item.endTime,
+    );
+
+    /**
+     * Updates all the server changes
+     */
+    @BackgroundTask(60_000)
+    update(): void {
+        serverUtilityModule.ourServers.forEach((server) => {
+            if (!this.priorityRamSpaceUsed.getByKey(server.hostname)) {
+                this.priorityRamSpaceUsed.insert({
+                    hostname: server.hostname,
+                    avaiableRam: server.maxRam,
+                    totalRam: server.maxRam,
+                });
+            } else {
+                const difference =
+                    server.maxRam -
+                    this.priorityRamSpaceUsed.getByKey(server.hostname)!
+                        .totalRam;
+                if (difference != 0) {
+                    this.priorityRamSpaceUsed.getByKey(
+                        server.hostname,
+                    )!.totalRam += difference;
+                    this.priorityRamSpaceUsed.getByKey(
+                        server.hostname,
+                    )!.avaiableRam += difference;
+                    this.priorityRamSpaceUsed.update(server.hostname);
+                }
+            }
+        });
+    }
+
+    /**
+     * Helper function to start tracking a new script
+     * @param ascript Script to track
+     */
+    protected pushActiveScipt(ascript: ActiveScript): void {
+        this.timedScriptHeap.insert(ascript);
+        this.priorityRamSpaceUsed.getByKey(ascript.hostname)!.avaiableRam -=
+            ascript.ramUsage;
+    }
+
+    /**
+     * Helper function to stop tracking a new script
+     * @param ascript Script to remove
+     */
+    protected clearActiveScript(ascript: ActiveScript): void {
+        this.priorityRamSpaceUsed.getByKey(ascript.hostname)!.avaiableRam +=
+            ascript.ramUsage;
+    }
+
+    /**
+     * Wrapper for kill that clears the active scripts where relevant
+     * @param pid script to kill
+     */
+    protected kill(pid: number): void {
+        const ascript = this.timedScriptHeap.removeByKey(pid);
+        if (ascript) {
+            this.clearActiveScript(ascript);
+        }
+        this.ns.kill(pid);
+    }
+
+    /** Clears out finished scripts from the ram tracking */
+    protected manageActiveScripts() {
+        const currentTime = Date.now();
+        while (
+            (this.timedScriptHeap.peek()?.endTime ?? Infinity) <= currentTime &&
+            !this.ns.isRunning(this.timedScriptHeap.peek()!.pid)
+        ) {
+            this.clearActiveScript(this.timedScriptHeap.pop()!);
+        }
+    }
+}
+
+/** Primary module, handles the scheduling of all ram, mostly focused around hacking */
+class HackingSchedulerModule extends RamUsageSubmodule {
+    /** Subtasks that handle their own scheduling */
+    taskList: Array<RamTaskManager> = [];
 
     init(ns: NS) {
         super.init(ns);
 
-        this.taskList = {
-            0: new InitialHackingTarget(
-                this.ns,
-                (script: HackScript, threads: number) => 0,
-                () => 0,
-                ns.getServer('home'),
-                [],
+        this.taskList = [
+            new RamTaskManager(),
+            new RamTaskManager(),
+            new FillerRamTask(
+                ns,
+                'share',
+                (threads: number) => this.fill('share', threads, 2),
+                this.kill,
+                0,
             ),
-            1: new InitialHackingTarget(
-                this.ns,
-                (script: HackScript, threads: number) => 0,
-                () => 0,
-                ns.getServer('home'),
-                [],
-            ),
-            2: new FillerRamTask(ns, scriptMapping.share),
-        };
+        ];
     }
-
-    private setMaker(
-        target: Server,
-        stagedSequencing: BatchSequencing[],
-        priority: 0 | 1,
-    ) {
-        if (
-            this.taskList[priority] != null &&
-            this.taskList[priority]!.target.hostname != target.hostname
-        ) {
-            this.taskList[priority]!.killAll();
-        }
-        if (
-            this.taskList[priority] === null ||
-            this.taskList[priority]!.target.hostname != target.hostname
-        ) {
-            const fireForTarget = (script: HackScript, threads: number) =>
-                this.fire(target.hostname, script, threads, priority);
-            this.taskList[priority] = new HackingTarget(
-                this.ns,
-                fireForTarget,
-                () => 0,
-                target,
-                stagedSequencing,
-            );
-        } else {
-            this.taskList[priority]!.updateStagedSequencing(stagedSequencing);
-        }
-    }
-
-    /** Updates the money maker */
-    public setMoneyMaker = (
-        target: Server,
-        stagedSequencing: BatchSequencing[],
-    ) => this.setMaker(target, stagedSequencing, 0);
-
-    /** Updates the exp maker */
-    public setExpMaker = (
-        target: Server,
-        stagedSequencing: BatchSequencing[],
-    ) => this.setMaker(target, stagedSequencing, 1);
 
     /**
-     * Fires off a script with a particular amount of RAM
-     * @param target
-     * @param script
-     * @param threads
-     * @param priority
-     * @returns
+     * Fires off a priority script with a particular amount of threads
+     * @param target Target server of the script
+     * @param script Script to run
+     * @param threads Number of threads to spawn
+     * @param args any additional args
+     * @returns pid
      */
     private fire(
         target: string,
-        script: HackScript,
+        script: HackScriptType,
         threads: number,
-        priority: number,
+        endTime: number,
+        ...args: ScriptArg[]
     ): number {
         const neededRam = this.ns.getScriptRam(scriptMapping[script]) * threads;
-        const placementServer = this.requestRam(neededRam, priority + 1);
-        if (placementServer) {
-            return this.ns.exec(
+        const server = this.requestSingleRam(neededRam);
+        if (server) {
+            const pid = this.ns.exec(
                 scriptMapping[script],
-                placementServer.hostname,
+                server.hostname,
                 threads,
                 target,
+                ...args,
             );
+            this.pushActiveScipt({
+                hostname: server.hostname,
+                ramUsage: neededRam,
+                endTime: endTime,
+                pid: pid,
+            });
+
+            return pid;
         } else {
             return 0;
         }
     }
 
     /**
-     * Finds or creates a server with the nessisary ram
-     * @param neededRam Amount of ram requested
-     * @param priority What priority to free ram for, will only cancel 'lower' priority
+     * Fills a specified amount of ram with
+     * @param script script to run
+     * @param neededThreads total number of threads needed
+     * @param priority priority number of the fill
+     * @param args any additional args
      */
-    private requestRam(neededRam: number, priority: number): Server | void {}
+    private fill(
+        script: ScriptType,
+        neededThreads: number,
+        priority: number,
+        ...args: ScriptArg[]
+    ): number[] {
+        const filename = scriptMapping[script];
+        const ramPerThread = this.ns.getScriptRam(filename);
+        const newPids: Array<number> = [];
 
-    /** Handles the scheduling */
+        for (let hostname in serverUtilityModule.ourHostnames) {
+            const server = serverUtilityModule.ourServers.get(hostname)!;
+
+            for (let i = priority + 1; i < this.taskList.length; i++) {
+                this.taskList[i].freeServer(server);
+            }
+
+            neededThreads += this.taskList[priority].freeServer(server);
+
+            const threads = Math.min(
+                (server.maxRam - this.ns.getServerUsedRam(hostname)) /
+                    ramPerThread,
+                neededThreads,
+            );
+
+            newPids.push(this.ns.exec(filename, hostname, threads, ...args));
+
+            neededThreads -= threads;
+            if (neededThreads === 0) {
+                break;
+            }
+        }
+        return newPids;
+    }
+
+    /**
+     * Finds or creates a server with the nessisary block of ram
+     * @param neededRam Amount of ram requested
+     * @param priority Always high priority
+     */
+    private requestSingleRam(
+        neededRam: number,
+        coreEffected?: boolean,
+    ): Server | null {
+        const result = this.priorityRamSpaceUsed.findNext(neededRam);
+        return result
+            ? serverUtilityModule.ourServers.get(result.hostname)!
+            : null;
+    }
+
+    /**
+     * Helper function to create new hack tasks
+     * @param target target of the hack task
+     * @param hackingEvaluator the evaluator associated with this hack task request
+     * @param getRamPercent function to get the percentage of ram to use for this task
+     * @param taskType metadata for the task
+     * @returns the new hack task
+     */
+    private createHackTask(
+        target: Server,
+        hackingEvaluator: HackingEvaluator,
+        getRamPercent: () => number,
+        taskType: string,
+    ): HackingRamTask {
+        const checkSecurity = () =>
+            this.ns.getServerSecurityLevel(target.hostname) ===
+            this.ns.getServerMinSecurityLevel(target.hostname);
+        return new HackingRamTask(
+            this.ns,
+            (script: HackScriptType, threads: number, endTime: number) =>
+                this.fire(target.hostname, script, threads, endTime),
+            this.kill,
+            target,
+            () => null,
+            () =>
+                hackingEvaluator.getPolicy(
+                    getRamPercent() * serverUtilityModule.totalServerRam(),
+                    target,
+                ),
+            () => checkSecurity(),
+            taskType,
+        );
+    }
+
+    /** Primary loop, triggers everything */
     @PriorityTask
-    schedule(): number {
-        const currentTime = Date.now();
+    manageActiveScripts(): number {
+        super.manageActiveScripts();
+        return Math.min(...this.taskList.map((task) => task.manage()));
+    }
 
-        if (this.nextCallTimes[0] <= currentTime) {
-            this.nextCallTimes[0] = this.taskList[0]!.schedule();
+    /** Helper task to update the money strategy implementation */
+    @BackgroundTask(30_000)
+    updateMoney(): void {
+        const target = hackingUtilityModule.growEvaluation!.getTarget();
+        const task = this.taskList[0];
+        if (
+            (task instanceof HackingRamTask || task instanceof WeakenRamTask) &&
+            task.target === target
+        ) {
+            if (
+                task instanceof WeakenRamTask &&
+                this.ns.getServerSecurityLevel(target.hostname) ===
+                    this.ns.getServerMinSecurityLevel(target.hostname)
+            ) {
+                task.killAll();
+                this.taskList[0] = this.createHackTask(
+                    target,
+                    hackingUtilityModule.growEvaluation!,
+                    () => hackingUtilityModule.ramProportioningTargets!.money,
+                    'grow',
+                );
+            } else if (
+                task instanceof HackingRamTask &&
+                task.taskType === 'grow' &&
+                this.ns.getServerMoneyAvailable(target.hostname) ===
+                    this.ns.getServerMaxMoney(target.hostname)
+            ) {
+                // TODO: we can probably do better than this, we can stop growing earlier?
+                this.taskList[0] = this.createHackTask(
+                    target,
+                    hackingUtilityModule.moneyEvaluation!,
+                    () => hackingUtilityModule.ramProportioningTargets!.money,
+                    'money',
+                );
+            }
+        } else {
+            if (task instanceof WeakenRamTask) {
+                task.killAll();
+            }
+            this.taskList[0] = new WeakenRamTask(
+                this.ns,
+                (threads: number) =>
+                    this.fill('weakenLooped', threads, 0, target.hostname),
+                this.kill,
+                hackingUtilityModule.ramProportioningTargets!.money *
+                    serverUtilityModule.totalServerRam(),
+                target,
+            );
         }
-        if (this.nextCallTimes[1] <= currentTime) {
-            this.nextCallTimes[1] = this.taskList[1]!.schedule();
+    }
+
+    /** Helper task to update the exp strategy implementation */
+    @BackgroundTask(30_000)
+    updateExp(): void {
+        const target = hackingUtilityModule.expEvaluation!.getTarget();
+        const task = this.taskList[1];
+        if (
+            (task instanceof HackingRamTask || task instanceof WeakenRamTask) &&
+            task.target === target
+        ) {
+            if (
+                task instanceof WeakenRamTask &&
+                this.ns.getServerSecurityLevel(target.hostname) ===
+                    this.ns.getServerMinSecurityLevel(target.hostname)
+            ) {
+                task.killAll();
+                this.taskList[1] = this.createHackTask(
+                    target,
+                    hackingUtilityModule.expEvaluation!,
+                    () => hackingUtilityModule.ramProportioningTargets!.exp,
+                    'exp',
+                );
+            }
+        } else {
+            if (task instanceof WeakenRamTask) {
+                task.killAll();
+            }
+            this.taskList[1] = new WeakenRamTask(
+                this.ns,
+                (threads: number) =>
+                    this.fill('weakenLooped', threads, 1, target.hostname),
+                this.kill,
+                hackingUtilityModule.ramProportioningTargets!.exp *
+                    serverUtilityModule.totalServerRam(),
+                target,
+            );
         }
-
-        serverUtilityModule.ourServers.forEach((server) => {
-            server.maxRam -
-                this.priorityRamSpaceUsedMap[2].getByKey(server.hostname)!
-                    .avaiableRam;
-        });
-
-        return Math.min(this.nextCallTimes[0], this.nextCallTimes[1]);
     }
 }
 
 /**
  * ### HackingSchedulerModule Uniqueness
- * This modules handles Ram management for hacking processes, shares, and staneks
- * It follows the setup form hackingUtilityModule
+ * This module implements the hacking policy
  */
 export const hackingSchedulerModule = new HackingSchedulerModule();
 state.push(hackingSchedulerModule);

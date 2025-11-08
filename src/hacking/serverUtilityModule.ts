@@ -3,16 +3,7 @@ import { BackgroundTask, PriorityTask } from '/lib/schedulingDecorators';
 import { BaseModule } from '/lib/baseModule';
 import { Heap } from '/lib/heap';
 import { state } from '/lib/state';
-
-const purchasedServerPrefix = 'pserv-';
-
-export const scriptMapping = {
-    hack: '/scripts/hackScript.js',
-    grow: '/scripts/growScript.js',
-    weaken: '/scripts/weakenScript.js',
-    share: '/scripts/shareScript.js',
-    stanek: '/scripts/stanekScript.js',
-};
+import { purchasedServerPrefix, scriptMapping } from '/hacking/constants';
 
 type PurchasedServer = {
     name: string;
@@ -26,6 +17,8 @@ export class ServerUtilityModule extends BaseModule {
     public servers: Map<string, Server> = new Map<string, Server>();
     /** Map of servers that we have admin of */
     public ourServers: Map<string, Server> = new Map<string, Server>();
+    /** Cannonical ordered hostnames */
+    public ourHostnames: Array<string> = [];
     /** Array of servers that are not yet rooted */
     private futureRootableServers: Array<Server> = [];
     /** Array of servers that can be hacked for money or exp */
@@ -38,6 +31,8 @@ export class ServerUtilityModule extends BaseModule {
     );
     /** List of crackers */
     private crackers: { file: string; fn: (host: string) => boolean }[] = [];
+    /** List of hooks for server updates */
+    private serverUpdateHooks: Array<(server: Server) => void> = [];
 
     init(ns: NS) {
         super.init(ns);
@@ -56,6 +51,7 @@ export class ServerUtilityModule extends BaseModule {
     fullServerScan(): void {
         this.servers = new Map<string, Server>();
         this.ourServers = new Map<string, Server>();
+        this.ourHostnames = [];
         this.futureRootableServers = [];
         this.targetableServers = [];
         this.futureTargetableServers = [];
@@ -64,7 +60,7 @@ export class ServerUtilityModule extends BaseModule {
 
         while (queue.length > 0) {
             const servername: string = queue.pop()!;
-            const server = this.ns.getServer(servername);
+            const server = this.serverUpdate(servername);
             this.servers.set(servername, server);
             this.ns.scan(servername).forEach((neighbor) => {
                 if (!seen.has(neighbor)) {
@@ -76,6 +72,7 @@ export class ServerUtilityModule extends BaseModule {
                 this.futureRootableServers.push(server);
             } else {
                 this.ourServers.set(servername, server);
+                this.ourHostnames.push(servername);
             }
             if (server.hackDifficulty != null && server.hackDifficulty! > 0) {
                 if (server.hasAdminRights) {
@@ -113,6 +110,7 @@ export class ServerUtilityModule extends BaseModule {
                     }
                 }
                 this.ourServers.set(server.hostname, server);
+                this.ourHostnames.push(server.hostname);
                 return true;
             },
         );
@@ -148,8 +146,8 @@ export class ServerUtilityModule extends BaseModule {
             if (hostname === '') {
                 this.ns.tprint('purchaseServer() assertion failure');
             } else {
-                this.servers.set(hostname, this.ns.getServer(hostname));
-                this.ourServers.set(hostname, this.ns.getServer(hostname));
+                this.servers.set(hostname, this.serverUpdate(hostname));
+                this.ourServers.set(hostname, this.serverUpdate(hostname));
             }
         } else {
             const upgradeServer = this.purchasedServers.pop()!;
@@ -171,12 +169,13 @@ export class ServerUtilityModule extends BaseModule {
             }
             this.servers.set(
                 upgradeServer.name,
-                this.ns.getServer(upgradeServer.name),
+                this.serverUpdate(upgradeServer.name),
             ); //TODO: Is this needed?
             this.ourServers.set(
                 upgradeServer.name,
-                this.ns.getServer(upgradeServer.name),
+                this.serverUpdate(upgradeServer.name),
             ); //TODO: Is this needed?
+            this.ourHostnames.push(upgradeServer.name);
         }
     }
 
@@ -214,7 +213,7 @@ export class ServerUtilityModule extends BaseModule {
             Array.from(this.ourServers.values()).reduce(
                 (acc, server) => acc + server.maxRam,
                 0,
-            ) - this.claimedRam
+            ) - this.ns.getRunningScript()!.ramUsage
         );
     }
 
@@ -235,6 +234,16 @@ export class ServerUtilityModule extends BaseModule {
                 this.ns.scp(script, server.hostname);
             }
         });
+    }
+
+    public serverUpdateHook(fn: (server: Server) => void) {
+        this.serverUpdateHooks.push(fn);
+    }
+
+    private serverUpdate(hostname: string): Server {
+        const server = this.ns.getServer(hostname);
+        this.serverUpdateHooks.forEach((hook) => hook(server));
+        return server;
     }
 }
 
