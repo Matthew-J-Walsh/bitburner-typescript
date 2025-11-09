@@ -130,6 +130,10 @@ export class SortedArray<K, T> {
         yield* this.arr;
     }
 
+    toArray(): T[] {
+        return [...this.arr];
+    }
+
     // --- internal helpers ---
     /**
      * Numeric comparison helper for values extracted by `getValue`.

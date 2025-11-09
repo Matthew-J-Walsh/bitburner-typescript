@@ -116,4 +116,8 @@ export class KeyedMinHeap<K, T> {
     isEmpty() {
         return this.heap.length === 0;
     }
+
+    toArray(): T[] {
+        return [...this.heap];
+    }
 }

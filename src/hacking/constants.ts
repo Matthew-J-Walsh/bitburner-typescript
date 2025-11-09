@@ -22,10 +22,6 @@ export const batchMaximumDelay = 100;
 /** Time to wait if we aren't at minimum security */
 export const securityFailureWaitTime = 10;
 
-/** Type for strings related to hacking scripts */
-export type HackScriptType = 'hack' | 'grow' | 'weaken';
-/** Iterable for possible HackScriptTypes */
-export const hackScriptTypes = ['hack', 'grow', 'weaken'] as HackScriptType[];
 /** General script type */
 export type ScriptType =
     | 'hack'
@@ -34,6 +30,11 @@ export type ScriptType =
     | 'weakenLooped'
     | 'share'
     | 'stanek';
+/** Type for strings related to hacking scripts */
+export type HackScriptType = 'hack' | 'grow' | 'weaken';
+/** Iterable for possible HackScriptTypes */
+export const hackScriptTypes = ['hack', 'grow', 'weaken'] as HackScriptType[];
+export type LoopedScriptType = 'weakenLooped' | 'share' | 'stanek';
 
 /** Structure of a grow batch */
 export const growStructure: HackScriptType[] = ['grow', 'weaken'];
@@ -52,3 +53,6 @@ export type HackingScript = {
     script: HackScriptType;
     threads: number;
 };
+
+export type Time = number;
+export type ProcessID = number;
