@@ -129,6 +129,10 @@ class RamTaskManager {
 
     /** Verifies assumptions about this are true */
     public integrityCheck(): void {}
+
+    public log(): Record<string, any> {
+        return {};
+    }
 }
 
 /** Task that fills some of the Ram up with a spammable script */
@@ -206,13 +210,11 @@ class FillerRamTask extends RamTaskManager {
         });
         if (
             this.managedRam !=
-            this.managedScripts
-                .values()
-                .reduce(
-                    (acc: number, pid: number) =>
-                        acc + this.ns.getRunningScript(pid)!.ramUsage,
-                    0,
-                )
+            Array.from(this.managedScripts.values()).reduce(
+                (acc: number, pid: number) =>
+                    acc + this.ns.getRunningScript(pid)!.ramUsage,
+                0,
+            )
         ) {
             throw new Error(
                 `Filler Ram Task Integrity Failure - Managed Ram Missmatch`,
@@ -221,6 +223,17 @@ class FillerRamTask extends RamTaskManager {
         if (this.managedRam > this.targetRamGetter() * 1.1) {
             this.ns.tprint('Filler Ram Task Integrity Warning - OverRAM');
         }
+    }
+
+    get isEmpty(): boolean {
+        return this.managedScripts.size === 0;
+    }
+
+    public log(): Record<string, any> {
+        return {
+            managedRam: this.managedRam,
+            numberOfManagedScripts: this.managedScripts.size,
+        };
     }
 }
 
@@ -236,7 +249,6 @@ class WeakenRamTask extends FillerRamTask {
         protected targetRamGetter: () => number,
     ) {
         super(ns, scriptMapping['weaken'], fill, kill, targetRamGetter);
-        this.ramPerThread = this.ns.getScriptRam(this.scriptName);
     }
 
     /**
@@ -256,14 +268,10 @@ class WeakenRamTask extends FillerRamTask {
         this.managedScripts = new Map<string, number>();
         this.managedRam = 0;
     }
-
-    get isEmpty(): boolean {
-        return this.managedScripts.size === 0;
-    }
 }
 
 /** Task that handles creating new hacking batches */
-class HackingRamTaskNew extends RamTaskManager {
+class HackingRamTask extends RamTaskManager {
     /** Weaken subtask */
     private weakenRamTask?: WeakenRamTask;
     /** Next manage time */
@@ -506,6 +514,23 @@ class HackingRamTaskNew extends RamTaskManager {
                 }
         }
     }
+
+    public log(): Record<string, any> {
+        return {
+            ...{ subWeaken: this.weakenRamTask!.log() },
+            ...{
+                nextManageTime: this.nextManageTime,
+                nextBatchInitializationTime: this.nextBatchInitializationTime,
+                nextHackEndTime: this.scriptQueues.hack.peek()?.endTime ?? 0,
+                hackQueueLength: this.scriptQueues.hack.length,
+                nextGrowEndTime: this.scriptQueues.grow.peek()?.endTime ?? 0,
+                growQueueLength: this.scriptQueues.grow.length,
+                nextWeakenEndTime:
+                    this.scriptQueues.weaken.peek()?.endTime ?? 0,
+                weakenQueueLength: this.scriptQueues.weaken.length,
+            },
+        };
+    }
 }
 
 /** Holds the information needed to determine how much ram a server has in use by priority tasks */
@@ -654,6 +679,17 @@ class RamUsageSubmodule extends BaseModule {
             );
         }
 
+        if (
+            !liveScripts.every((ascript) => {
+                const rscript = this.ns.getRunningScript(ascript.pid);
+                return rscript === null || rscript.server == ascript.hostname;
+            })
+        ) {
+            throw new Error(
+                'Ram Usage Submodule Integrity Error - Script Has Wrong Server',
+            );
+        }
+
         this.priorityRamSpaceUsed.toArray().forEach((ramSpace) => {
             const maxRam = this.ns.getServerMaxRam(ramSpace.hostname);
             const usedRam = this.ns.getServerUsedRam(ramSpace.hostname);
@@ -683,6 +719,13 @@ class RamUsageSubmodule extends BaseModule {
             }
         });
     }
+
+    public log(): Record<string, any> {
+        return {
+            trackedOnGoingScripts: this.timedScriptHeap.size,
+            trackedServerNumber: this.priorityRamSpaceUsed.size,
+        };
+    }
 }
 
 /** Primary module, handles the scheduling of all ram, mostly focused around hacking */
@@ -690,11 +733,11 @@ class HackingSchedulerModule extends RamUsageSubmodule {
     /** Subtasks that handle their own scheduling */
     taskList: Array<RamTaskManager> = [];
 
-    init(ns: NS) {
+    public init(ns: NS) {
         super.init(ns);
 
         this.taskList = [
-            new HackingRamTaskNew(
+            new HackingRamTask(
                 ns,
                 (
                     target: string,
@@ -708,7 +751,7 @@ class HackingSchedulerModule extends RamUsageSubmodule {
                 () => null,
                 hackingUtilityModule.moneyEvaluation,
             ),
-            new HackingRamTaskNew(
+            new HackingRamTask(
                 ns,
                 (
                     target: string,
@@ -717,14 +760,14 @@ class HackingSchedulerModule extends RamUsageSubmodule {
                     endTime: number,
                 ) => this.fire(target, script, threads, endTime),
                 (target: string, threads: number) =>
-                    this.fill('weakenLooped', threads, 0, target),
+                    this.fill('weakenLooped', threads, 1, target),
                 this.kill,
                 () => null,
                 hackingUtilityModule.expEvaluation,
             ),
             new FillerRamTask(
                 ns,
-                'share',
+                scriptMapping.share,
                 (threads: number) => this.fill('share', threads, 2),
                 this.kill,
                 () => hackingUtilityModule.shareRam,
@@ -788,7 +831,10 @@ class HackingSchedulerModule extends RamUsageSubmodule {
         const ramPerThread = this.ns.getScriptRam(filename);
         const newPids: Array<number> = [];
 
-        for (let hostname in serverUtilityModule.ourHostnames) {
+        for (let hostname of serverUtilityModule.ourHostnames) {
+            if (neededThreads === 0) {
+                break;
+            }
             const server = serverUtilityModule.ourServers.get(hostname)!;
 
             for (let i = priority + 1; i < this.taskList.length; i++) {
@@ -798,17 +844,16 @@ class HackingSchedulerModule extends RamUsageSubmodule {
             neededThreads += this.taskList[priority].freeServer(server);
 
             const threads = Math.min(
-                (server.maxRam - this.ns.getServerUsedRam(hostname)) /
-                    ramPerThread,
+                Math.floor(
+                    (server.maxRam - this.ns.getServerUsedRam(hostname)) /
+                        ramPerThread,
+                ),
                 neededThreads,
             );
 
             newPids.push(this.ns.exec(filename, hostname, threads, ...args));
 
             neededThreads -= threads;
-            if (neededThreads === 0) {
-                break;
-            }
         }
         return newPids;
     }
@@ -841,11 +886,20 @@ class HackingSchedulerModule extends RamUsageSubmodule {
         this.taskList.forEach((task) => task.integrityCheck());
         super.integrityCheck();
     }
+
+    public log(): Record<string, any> {
+        return {
+            ...super.log(),
+            ...this.taskList.reduce((acc, task, idx) => {
+                return { ...acc, ...{ [idx]: task.log() } };
+            }, {}),
+        };
+    }
 }
 
 /**
  * ### HackingSchedulerModule Uniqueness
- * This module implements the hacking policy
+ * This module implements the hacking strategy
  */
 export const hackingSchedulerModule = new HackingSchedulerModule();
 state.push(hackingSchedulerModule);

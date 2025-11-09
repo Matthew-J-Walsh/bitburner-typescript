@@ -62,7 +62,7 @@ export class Heap<T> {
         }
     }
 
-    size(): number {
+    get size(): number {
         return this.heap.length;
     }
 }

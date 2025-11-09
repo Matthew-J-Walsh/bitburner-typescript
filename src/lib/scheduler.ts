@@ -96,6 +96,6 @@ export class Scheduler {
     /** Requested sleep time */
     getNextSleepTime(): number {
         const next = this.nextPriorityTime();
-        return Math.max(0, next - Date.now());
+        return Math.max(1, next - Date.now());
     }
 }

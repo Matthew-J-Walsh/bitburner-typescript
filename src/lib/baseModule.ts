@@ -11,11 +11,22 @@ export abstract class BaseModule {
     constructor() {}
 
     /** Initializes the module */
-    init(ns: NS) {
+    public init(ns: NS) {
         this.ns = ns;
         ns.tprint('registering');
         registerPriorityTaskForModule(this);
         registerBackgroundTaskForModule(this);
+    }
+
+    /**
+     * Optional module-specific logging hook.
+     * Override in subclasses to return additional key->any entries to be
+     * injected into the log output for this module. The default implementation
+     * returns an empty record.
+     * @returns Record of string keys to any values to include in logs
+     */
+    public log(): Record<string, any> {
+        return {};
     }
 }
 

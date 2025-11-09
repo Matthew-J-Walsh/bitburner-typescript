@@ -14,7 +14,7 @@ class LoggingModule extends BaseModule {
     /** Logging filename */
     filename: string = '/logs/BN-?-?/?.txt';
 
-    init(ns: NS) {
+    public init(ns: NS) {
         super.init(ns);
         this.filename = getNextLogFile(this.ns);
         this.ns.tprint(`Logging to file: ${this.filename}`);

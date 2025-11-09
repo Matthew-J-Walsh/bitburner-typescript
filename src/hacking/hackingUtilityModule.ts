@@ -10,12 +10,11 @@ import {
     gwStructure,
     hwgwStructure,
     hwStructure,
+    hackScriptSize,
+    growScriptSize,
+    weakenScriptSize,
+    weakenRatio,
 } from '/hacking/constants';
-
-const hackScriptSize = 1.7;
-const growScriptSize = 1.75;
-const weakenScriptSize = 1.75;
-const weakenRatio = 1.0 / 26.0;
 
 export type HackingPolicy = {
     /** Home for do nothing */
@@ -494,7 +493,7 @@ export class HackingUtilityModule extends BaseModule {
     shareRam: number = 0;
     //stockEvaulation?: HackingEvaulation
 
-    init(ns: NS) {
+    public init(ns: NS) {
         super.init(ns);
 
         this.moneyEvaluation.init(
@@ -569,6 +568,17 @@ export class HackingUtilityModule extends BaseModule {
                 serverUtilityModule.totalServerRam * 0.2;
             this.shareRam = serverUtilityModule.totalServerRam; // * .2
         }
+    }
+
+    public log(): Record<string, any> {
+        return {
+            moneyStage: this.moneyEvaluation!.stage,
+            moneyTarget: this.moneyEvaluation!.target,
+            moneyRam: this.moneyEvaluation!.ramAllocation,
+            expStage: this.expEvaluation!.stage,
+            expTarget: this.expEvaluation!.target,
+            expRam: this.expEvaluation!.ramAllocation,
+        };
     }
 }
 

@@ -110,7 +110,7 @@ export class KeyedMinHeap<K, T> {
         return removed;
     }
 
-    size() {
+    get size(): number {
         return this.heap.length;
     }
     isEmpty() {

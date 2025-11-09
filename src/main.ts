@@ -5,15 +5,16 @@ import { BaseModule } from '/lib/baseModule';
 import { state, prepareStateForLogging } from '/lib/state';
 
 // Loaded modules:
-import '/testing/testingModule';
+//import '/testing/testingModule';
 import '/lib/loggingModule';
+import '/hacking/serverUtilityModule';
+import '/hacking/hackingUtilityModule';
+import '/hacking/hackingModule';
+import '/core/money/moneyModule';
 
 export async function main(ns: NS) {
     ns.disableLog('ALL');
 
-    //ns.tprint();
-    //ns.tprint(priorityTasks.length);
-    //ns.tprint(backgroundTasks.length);
     priorityTasks.length = 0;
     backgroundTasks.length = 0;
 

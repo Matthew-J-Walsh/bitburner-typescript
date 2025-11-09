@@ -1,18 +1,16 @@
 import { NS, Server } from '@ns';
 import { BackgroundTask, PriorityTask } from '/lib/schedulingDecorators';
 import { BaseModule } from '/lib/baseModule';
-import { Heap } from '/lib/heap';
 import { state } from '/lib/state';
+import { Heap } from '/lib/heap';
 import { purchasedServerPrefix, scriptMapping } from '/hacking/constants';
 
 type PurchasedServer = {
-    name: string;
-    ram: number;
+    hostname: string;
+    totalRam: number;
 };
 
 export class ServerUtilityModule extends BaseModule {
-    /** Amount of RAM used by the primary process */
-    private claimedRam: number = 128;
     /** Full map of servers */
     public servers: Map<string, Server> = new Map<string, Server>();
     /** Map of servers that we have admin of */
@@ -27,14 +25,14 @@ export class ServerUtilityModule extends BaseModule {
     private futureTargetableServers: Array<Server> = [];
     /** Heap of purchased servers by RAM size */
     private purchasedServers: Heap<PurchasedServer> = new Heap<PurchasedServer>(
-        (a, b) => b.ram - a.ram,
+        (a, b) => b.totalRam - a.totalRam,
     );
     /** List of crackers */
     private crackers: { file: string; fn: (host: string) => boolean }[] = [];
     /** List of hooks for server updates */
     private serverUpdateHooks: Array<(server: Server) => void> = [];
 
-    init(ns: NS) {
+    public init(ns: NS) {
         super.init(ns);
         this.fullServerScan();
         this.crackers = [
@@ -44,7 +42,6 @@ export class ServerUtilityModule extends BaseModule {
             { file: 'HTTPWorm.exe', fn: this.ns.httpworm },
             { file: 'SQLInject.exe', fn: this.ns.sqlinject },
         ];
-        this.claimedRam = ns.ramOverride();
     }
 
     /** Scans all servers, refreshing the server record */
@@ -57,6 +54,7 @@ export class ServerUtilityModule extends BaseModule {
         this.futureTargetableServers = [];
         const seen = new Set<string>();
         const queue: string[] = ['home'];
+        seen.add('home');
 
         while (queue.length > 0) {
             const servername: string = queue.pop()!;
@@ -71,8 +69,20 @@ export class ServerUtilityModule extends BaseModule {
             if (!server.hasAdminRights) {
                 this.futureRootableServers.push(server);
             } else {
+                this.ns.tprint('=================');
+                this.ns.tprint(servername);
+                this.ns.tprint(server);
                 this.ourServers.set(servername, server);
                 this.ourHostnames.push(servername);
+                this.ns.tprint(
+                    `ourHostnames=${JSON.stringify(this.ourHostnames)}`,
+                );
+                this.ns.tprint(
+                    `ourServers.keys=${JSON.stringify([...this.ourServers.keys()])}`,
+                );
+                this.ns.tprint(
+                    `ourServers.entries=${JSON.stringify([...this.ourServers.entries()])}`,
+                );
             }
             if (server.hackDifficulty != null && server.hackDifficulty! > 0) {
                 if (server.hasAdminRights) {
@@ -83,8 +93,8 @@ export class ServerUtilityModule extends BaseModule {
             }
             if (server.purchasedByPlayer) {
                 this.purchasedServers.push({
-                    name: servername,
-                    ram: server.maxRam,
+                    hostname: servername,
+                    totalRam: server.maxRam,
                 });
             }
         }
@@ -138,9 +148,9 @@ export class ServerUtilityModule extends BaseModule {
 
     /** Buys the least expensive RAM */
     public purchaseServer(): void {
-        if (this.purchasedServers.size() >= this.ns.getPurchasedServerLimit()) {
+        if (this.purchasedServers.size >= this.ns.getPurchasedServerLimit()) {
             const hostname = this.ns.purchaseServer(
-                purchasedServerPrefix + `${this.purchasedServers.size()}`,
+                purchasedServerPrefix + `${this.purchasedServers.size}`,
                 2,
             );
             if (hostname === '') {
@@ -152,30 +162,29 @@ export class ServerUtilityModule extends BaseModule {
         } else {
             const upgradeServer = this.purchasedServers.pop()!;
             const success = this.ns.upgradePurchasedServer(
-                upgradeServer.name,
-                upgradeServer.ram * 2,
+                upgradeServer.hostname,
+                upgradeServer.totalRam * 2,
             );
             if (!success) {
                 this.ns.tprint('purchaseServer() assertion failure');
                 this.purchasedServers.push({
-                    name: upgradeServer.name,
-                    ram: upgradeServer.ram,
+                    hostname: upgradeServer.hostname,
+                    totalRam: upgradeServer.totalRam,
                 });
             } else {
                 this.purchasedServers.push({
-                    name: upgradeServer.name,
-                    ram: upgradeServer.ram * 2,
+                    hostname: upgradeServer.hostname,
+                    totalRam: upgradeServer.totalRam * 2,
                 });
             }
             this.servers.set(
-                upgradeServer.name,
-                this.serverUpdate(upgradeServer.name),
+                upgradeServer.hostname,
+                this.serverUpdate(upgradeServer.hostname),
             ); //TODO: Is this needed?
             this.ourServers.set(
-                upgradeServer.name,
-                this.serverUpdate(upgradeServer.name),
+                upgradeServer.hostname,
+                this.serverUpdate(upgradeServer.hostname),
             ); //TODO: Is this needed?
-            this.ourHostnames.push(upgradeServer.name);
         }
     }
 
@@ -184,7 +193,7 @@ export class ServerUtilityModule extends BaseModule {
      * @returns [ram gained, cost]
      */
     public cheapestPurchasableServer(): [number, number] {
-        const smallestRam = this.purchasedServers.peek()?.ram ?? 0;
+        const smallestRam = this.purchasedServers.peek()?.totalRam ?? 0;
         const nextRam = smallestRam === 0 ? 2 : smallestRam * 2;
         if (nextRam > this.ns.getPurchasedServerMaxRam()) {
             return [0, 0];
@@ -193,7 +202,7 @@ export class ServerUtilityModule extends BaseModule {
             nextRam === 2
                 ? this.ns.getPurchasedServerCost(2)
                 : this.ns.getPurchasedServerUpgradeCost(
-                      this.purchasedServers.peek()!.name,
+                      this.purchasedServers.peek()!.hostname,
                       nextRam,
                   );
         return [nextRam === 2 ? 2 : nextRam / 2, cost];
@@ -213,7 +222,7 @@ export class ServerUtilityModule extends BaseModule {
             Array.from(this.ourServers.values()).reduce(
                 (acc, server) => acc + server.maxRam,
                 0,
-            ) - this.ns.getRunningScript()!.ramUsage
+            ) - this.ns.ramOverride()
         );
     }
 
@@ -244,6 +253,19 @@ export class ServerUtilityModule extends BaseModule {
         const server = this.ns.getServer(hostname);
         this.serverUpdateHooks.forEach((hook) => hook(server));
         return server;
+    }
+
+    public log(): Record<string, any> {
+        return {
+            totalRam: this.totalServerRam,
+            serversLength: this.servers.size,
+            ourServersLength: this.ourServers.size,
+            ourHostnamesLength: this.ourHostnames.length,
+            futureRootableServersLength: this.futureRootableServers.length,
+            targetableServersLength: this.targetableServers.length,
+            futureTargetableServersLength: this.futureTargetableServers.length,
+            purchasedServersLength: this.purchasedServers.size,
+        };
     }
 }
 

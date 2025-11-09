@@ -23,15 +23,31 @@ export function prepareStateForLogging(ns: NS) {
 export function logStateJSONL(ns: NS, filename: string) {
     const snapshot: Record<string, Record<string, any>> = Object.fromEntries(
         state.map((module) => {
-            const keys = fieldMap.get(module);
-            if (!keys) return [module.constructor.name, {}];
+            const keys = fieldMap.get(module) ?? [];
 
-            return [
-                module.constructor.name,
-                Object.fromEntries(
-                    keys.map((key) => [key, (module as any)[key]]),
-                ),
-            ];
+            // Build tracked properties object
+            const trackedObj: Record<string, any> = Object.fromEntries(
+                keys.map((key) => [key, (module as any)[key]]),
+            );
+
+            // Allow module to provide additional log entries via log()
+            const extra: Record<string, string> =
+                typeof (module as any).log === 'function'
+                    ? (module as any).log()
+                    : {};
+
+            // Warn on overlapping keys and prefer tracked properties when merging
+            Object.keys(extra).forEach((k) => {
+                if (k in trackedObj) {
+                    ns.tprint(
+                        `Warning: module ${module.constructor.name} log() key '${k}' overlaps a tracked property; tracked value will be kept.`,
+                    );
+                }
+            });
+
+            const merged = { ...extra, ...trackedObj };
+
+            return [module.constructor.name, merged];
         }),
     );
 

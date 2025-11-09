@@ -65,11 +65,10 @@ export class SortedArray<K, T> {
      */
     removeByKey(key: K): T | undefined {
         const item = this.keyMap.get(key);
-        if (!item) return item;
-        const v = this.getValue(item);
-        const lo = this.lowerBoundValue(v);
-        const hi = this.upperBoundValue(v);
-        const idx = this.findIndexInRange(item, lo, hi);
+        if (!item) return undefined;
+        // Search the entire array for the item's current stored position to be robust
+        // against callers that may have mutated the item's value before removing.
+        const idx = this.findIndexInRange(item, 0, this.arr.length);
         if (idx >= 0) this.arr.splice(idx, 1);
         this.keyMap.delete(key);
         return item;
@@ -84,13 +83,11 @@ export class SortedArray<K, T> {
     update(key: K): void {
         if (!this.keyMap.has(key)) return;
         const item = this.keyMap.get(key)!;
-        // Find and remove old position
-        const oldV = this.getValue(item);
-        const oldLo = this.lowerBoundValue(oldV);
-        const oldHi = this.upperBoundValue(oldV);
-        const oldIdx = this.findIndexInRange(item, oldLo, oldHi);
+        // Robust removal: search whole array for the existing item (by identity or key).
+        // This handles callers that mutate the item's value before calling update().
+        const oldIdx = this.findIndexInRange(item, 0, this.arr.length);
         if (oldIdx >= 0) this.arr.splice(oldIdx, 1);
-        // Reinsert according to new V
+        // Reinsert according to current value
         const newV = this.getValue(item);
         const newIdx = this.lowerBoundValue(newV);
         this.arr.splice(newIdx, 0, item);

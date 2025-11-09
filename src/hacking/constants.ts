@@ -1,16 +1,6 @@
 /** Prefix for purchased servers */
 export const purchasedServerPrefix = 'pserv-';
 
-/** Mapping of ScriptTypes to their script */
-export const scriptMapping = {
-    hack: '/scripts/hackScript.js',
-    grow: '/scripts/growScript.js',
-    weaken: '/scripts/weakenScript.js',
-    weakenLooped: '/scripts/weakenLoopedScript.js',
-    share: '/scripts/shareScript.js',
-    stanek: '/scripts/stanekScript.js',
-};
-
 /** Minimal time allowed between experience batches targeting the same target per pair TODO */
 export const minimalTimeBetweenPerPair = 500;
 /** Default delay for hacking priority returns */
@@ -30,6 +20,15 @@ export type ScriptType =
     | 'weakenLooped'
     | 'share'
     | 'stanek';
+/** Mapping of ScriptTypes to their script */
+export const scriptMapping = {
+    hack: '/scripts/hackScript.js',
+    grow: '/scripts/growScript.js',
+    weaken: '/scripts/weakenScript.js',
+    weakenLooped: '/scripts/weakenLoopedScript.js',
+    share: '/scripts/shareScript.js',
+    stanek: '/scripts/stanekScript.js',
+};
 /** Type for strings related to hacking scripts */
 export type HackScriptType = 'hack' | 'grow' | 'weaken';
 /** Iterable for possible HackScriptTypes */
@@ -55,5 +54,12 @@ export type HackingScript = {
     threads: number;
 };
 
+//TODO:
 export type Time = number;
 export type ProcessID = number;
+export type Threads = number;
+
+export const hackScriptSize = 1.7;
+export const growScriptSize = 1.75;
+export const weakenScriptSize = 1.75;
+export const weakenRatio = 1.0 / 26.0;
