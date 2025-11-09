@@ -26,6 +26,20 @@ import {
     HackScriptRuntimes as HackScriptTimes,
 } from '/hacking/constants';
 
+/** Holds the information about an actively running script */
+type ActiveScript = {
+    /** Hostname the script is running on */
+    hostname: string;
+    /** Thread count */
+    threads: number;
+    /** How much ram the script uses */
+    ramUsage: number;
+    /** The expected end time of the script */
+    endTime: number;
+    /** Process id of the script */
+    pid: number;
+};
+
 /** Element of a hacking batch */
 type HackingElement = {
     /** Targeted end time of the element */
@@ -138,7 +152,10 @@ class RamTaskManager {
 /** Task that fills some of the Ram up with a spammable script */
 class FillerRamTask extends RamTaskManager {
     /** Scripts started/managed by this filler */
-    protected managedScripts: Map<string, number> = new Map<string, number>();
+    protected managedScripts: Map<string, ActiveScript> = new Map<
+        string,
+        ActiveScript
+    >();
     /** How much ram is currently being managed */
     protected managedRam: number = 0;
     /** How much ram each thread uses */
@@ -149,7 +166,7 @@ class FillerRamTask extends RamTaskManager {
         /** Script file this filler will be filling with */
         protected scriptName: string,
         /** Method to fill with */
-        protected fill: (threads: number) => number[],
+        protected fill: (threads: number) => ActiveScript[],
         /** Method to kill with */
         protected kill: (pid: number) => void,
         /** Targeted amount of ram to consume */
@@ -171,10 +188,9 @@ class FillerRamTask extends RamTaskManager {
             Math.max(0, this.targetRamGetter() - this.managedRam) /
                 this.ramPerThread,
         );
-        this.fill(threads).forEach((pid) => {
-            const runningScript = this.ns.getRunningScript(pid)!; //TODO, we shouldn't need this call
-            this.managedScripts.set(runningScript.server, pid);
-            this.managedRam += runningScript.ramUsage;
+        this.fill(threads).forEach((ascript) => {
+            this.managedScripts.set(ascript.hostname, ascript);
+            this.managedRam += ascript.ramUsage;
         });
         return Date.now() + defaultDelay;
     }
@@ -186,14 +202,14 @@ class FillerRamTask extends RamTaskManager {
      */
     public freeServer(server: Server): number {
         if (this.managedScripts.has(server.hostname)) {
-            const ramFreed = this.ns.getRunningScript(
-                this.managedScripts.get(server.hostname),
-            )!;
+            const threadsFreed = this.managedScripts.get(
+                server.hostname,
+            )!.threads;
             const success = this.kill(
-                this.managedScripts.get(server.hostname)!,
+                this.managedScripts.get(server.hostname)!.pid,
             );
             this.managedScripts.delete(server.hostname);
-            return ramFreed.threads;
+            return threadsFreed;
         } else {
             return 0;
         }
@@ -201,18 +217,17 @@ class FillerRamTask extends RamTaskManager {
 
     /** Verifies assumptions about this are true */
     public integrityCheck(): void {
-        this.managedScripts.forEach((pid) => {
-            if (!this.ns.getRunningScript(pid)) {
-                throw new Error(
-                    `Filler Ram Task Integrity Failure - Dead Script in Management`,
+        this.managedScripts.forEach((ascript) => {
+            if (!this.ns.getRunningScript(ascript.pid)) {
+                this.ns.tprint(
+                    `Filler Ram Task Integrity Pseudo-Failure - Dead Script in Management`,
                 );
             }
         });
         if (
             this.managedRam !=
             Array.from(this.managedScripts.values()).reduce(
-                (acc: number, pid: number) =>
-                    acc + this.ns.getRunningScript(pid)!.ramUsage,
+                (acc: number, ascript: ActiveScript) => acc + ascript.ramUsage,
                 0,
             )
         ) {
@@ -242,7 +257,7 @@ class WeakenRamTask extends FillerRamTask {
     constructor(
         protected ns: NS,
         /** Method to fill with */
-        protected fill: (threads: number) => number[],
+        protected fill: (threads: number) => ActiveScript[],
         /** Method to kill with */
         protected kill: (pid: number) => void,
         /** Targeted amount of ram to consume */
@@ -262,10 +277,10 @@ class WeakenRamTask extends FillerRamTask {
      * Kills script managed, call when target changes or server is fully weakened.
      */
     public killAll(): void {
-        this.managedScripts.forEach((pid) => {
-            this.kill(pid);
+        this.managedScripts.forEach((ascript) => {
+            this.kill(ascript.pid);
         });
-        this.managedScripts = new Map<string, number>();
+        this.managedScripts = new Map<string, ActiveScript>();
         this.managedRam = 0;
     }
 }
@@ -299,7 +314,7 @@ class HackingRamTask extends RamTaskManager {
             endTime: number,
         ) => number,
         /** Method to fill with */
-        protected fill: (target: string, threads: number) => number[],
+        protected fill: (target: string, threads: number) => ActiveScript[],
         /** Function to kill with */
         protected kill: (pid: number) => void,
         /** Function to exec when we needed to cancel a batch */
@@ -543,18 +558,6 @@ type RamSpace = {
     totalRam: number;
 };
 
-/** Holds the information about an actively running script */
-type ActiveScript = {
-    /** Hostname the script is running on */
-    hostname: string;
-    /** How much ram the script uses */
-    ramUsage: number;
-    /** The expected end time of the script */
-    endTime: number;
-    /** Process id of the script */
-    pid: number;
-};
-
 /** Only submodule of hacking module, handles ram management, provides wrappers to simplify ram management for everything else */
 class RamUsageSubmodule extends BaseModule {
     /** Datastructure storing how much of each sever's ram is used by priority tasks */
@@ -747,7 +750,7 @@ class HackingSchedulerModule extends RamUsageSubmodule {
                 ) => this.fire(target, script, threads, endTime),
                 (target: string, threads: number) =>
                     this.fill('weakenLooped', threads, 0, target),
-                this.kill,
+                this.kill.bind(this),
                 () => null,
                 hackingUtilityModule.moneyEvaluation,
             ),
@@ -761,7 +764,7 @@ class HackingSchedulerModule extends RamUsageSubmodule {
                 ) => this.fire(target, script, threads, endTime),
                 (target: string, threads: number) =>
                     this.fill('weakenLooped', threads, 1, target),
-                this.kill,
+                this.kill.bind(this),
                 () => null,
                 hackingUtilityModule.expEvaluation,
             ),
@@ -769,7 +772,7 @@ class HackingSchedulerModule extends RamUsageSubmodule {
                 ns,
                 scriptMapping.share,
                 (threads: number) => this.fill('share', threads, 2),
-                this.kill,
+                this.kill.bind(this),
                 () => hackingUtilityModule.shareRam,
             ),
         ];
@@ -803,6 +806,7 @@ class HackingSchedulerModule extends RamUsageSubmodule {
             );
             this.pushActiveScipt({
                 hostname: server.hostname,
+                threads: threads,
                 ramUsage: neededRam,
                 endTime: endTime,
                 pid: pid,
@@ -826,10 +830,10 @@ class HackingSchedulerModule extends RamUsageSubmodule {
         neededThreads: number,
         priority: number,
         ...args: ScriptArg[]
-    ): number[] {
+    ): ActiveScript[] {
         const filename = scriptMapping[script];
         const ramPerThread = this.ns.getScriptRam(filename);
-        const newPids: Array<number> = [];
+        const newPids: Array<ActiveScript> = [];
 
         for (let hostname of serverUtilityModule.ourHostnames) {
             if (neededThreads === 0) {
@@ -851,7 +855,16 @@ class HackingSchedulerModule extends RamUsageSubmodule {
                 neededThreads,
             );
 
-            newPids.push(this.ns.exec(filename, hostname, threads, ...args));
+            if (threads !== 0) {
+                //this.ns.tprint(`${filename}, ${hostname}, ${threads}, ${args}`);
+                newPids.push({
+                    hostname: hostname,
+                    threads: threads,
+                    ramUsage: threads * ramPerThread,
+                    endTime: Infinity,
+                    pid: this.ns.exec(filename, hostname, threads, ...args),
+                });
+            }
 
             neededThreads -= threads;
         }

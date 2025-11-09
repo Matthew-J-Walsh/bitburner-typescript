@@ -66,23 +66,11 @@ export class ServerUtilityModule extends BaseModule {
                     queue.push(neighbor);
                 }
             });
-            if (!server.hasAdminRights) {
+            if (server.hasAdminRights === false) {
                 this.futureRootableServers.push(server);
             } else {
-                this.ns.tprint('=================');
-                this.ns.tprint(servername);
-                this.ns.tprint(server);
                 this.ourServers.set(servername, server);
                 this.ourHostnames.push(servername);
-                this.ns.tprint(
-                    `ourHostnames=${JSON.stringify(this.ourHostnames)}`,
-                );
-                this.ns.tprint(
-                    `ourServers.keys=${JSON.stringify([...this.ourServers.keys()])}`,
-                );
-                this.ns.tprint(
-                    `ourServers.entries=${JSON.stringify([...this.ourServers.entries()])}`,
-                );
             }
             if (server.hackDifficulty != null && server.hackDifficulty! > 0) {
                 if (server.hasAdminRights) {
@@ -112,6 +100,8 @@ export class ServerUtilityModule extends BaseModule {
                 if (server.numOpenPortsRequired! <= crackers.length) {
                     crackers.forEach((cracker) => cracker.fn(server.hostname));
                     if (this.ns.nuke(server.hostname)) {
+                        this.ourServers.set(server.hostname, server);
+                        this.ourHostnames.push(server.hostname);
                         return false;
                     } else {
                         this.ns.tprint(
@@ -119,8 +109,6 @@ export class ServerUtilityModule extends BaseModule {
                         );
                     }
                 }
-                this.ourServers.set(server.hostname, server);
-                this.ourHostnames.push(server.hostname);
                 return true;
             },
         );

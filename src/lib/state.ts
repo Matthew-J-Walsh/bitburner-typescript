@@ -58,14 +58,15 @@ export function logStateJSONL(ns: NS, filename: string) {
 export function getNextLogFile(ns: NS): string {
     const folder = '/logs/BN-1-1/';
     const files = ns.ls('home', folder);
-
     const numbers = files
-        .map((f) => f.match(/\/logs\/BN-1-1\/(\d+)\.txt$/))
+        .map((f) => f.match(/logs\/BN-1-1\/(\d+)\.txt$/))
         .filter((m): m is RegExpMatchArray => m !== null)
         .map((m) => parseInt(m[1], 10))
         .filter((n) => !isNaN(n));
 
     const next = numbers.length === 0 ? 1 : Math.max(...numbers) + 1;
+
+    ns.tprint(`Log file is: ${folder}${next}.txt`);
 
     return `${folder}${next}.txt`;
 }
