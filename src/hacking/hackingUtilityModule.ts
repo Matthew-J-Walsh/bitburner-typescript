@@ -7,9 +7,9 @@ import {
     minimalTimeBetweenPerPair,
     HackScriptType,
     HackingScript,
-    growStructure,
-    moneyStructure,
-    expStructure,
+    gwStructure,
+    hwgwStructure,
+    hwStructure,
 } from '/hacking/constants';
 
 const hackScriptSize = 1.7;
@@ -18,8 +18,10 @@ const weakenScriptSize = 1.75;
 const weakenRatio = 1.0 / 26.0;
 
 export type HackingPolicy = {
+    /** Home for do nothing */
     target: Server;
     spacing: number;
+    /** Empty for weaken */
     sequence: HackingScript[];
 };
 
@@ -160,77 +162,86 @@ export class HackingUtilityFunctions {
     }
 }
 
-/** An evaluator for a hacking decisions */
-export class HackingEvaluator {
+export abstract class HackingEvaluator {
+    /** NS */
+    protected ns?: NS;
+    /** Income formula for this evaluator */
+    private incomeFormula: (server: Server) => number = (server: Server) => 0;
+    /** Cost formula for this evaluator */
+    private costFormula: (server: Server) => number = (server: Server) => 0;
     /** Estimated incomes of the different server options */
-    incomeEstimates: Array<number> = [];
+    private incomeEstimates: Array<number> = [];
     /** Estimated change costs of the different server options */
-    costEstimates: Array<number> = [];
+    private costEstimates: Array<number> = [];
+    /** Current target */
+    protected _target?: Server;
+    /** Current amount of ram to allocate to this evaluator */
+    public ramAllocation: number = 0;
+    /** Stage of the evaluator */
+    public stage: number = -1;
 
-    constructor(
-        private ns: NS,
-        private incomeFormula: (server: Server) => number,
-        private costFormula: (server: Server) => number,
-        private structure: HackScriptType[],
-    ) {}
+    public init(
+        ns: NS,
+        incomeFormula: (server: Server) => number,
+        costFormula: (server: Server) => number,
+    ) {
+        this.ns = ns;
+        this.incomeFormula = incomeFormula;
+        this.costFormula = costFormula;
+    }
 
-    private iterateOverServers(fn: (server: Server) => number): Array<number> {
+    protected iterateOverServers<T>(fn: (server: Server) => T): Array<T> {
         return serverUtilityModule.targetableServers.map((server) =>
             fn(server),
         );
     }
 
-    /** Updates current evaluations */
+    /** Updates current evaluations and the target */
     public update() {
-        this.updateIncomeEstimates();
-        this.updateCostEstimates();
-    }
-
-    /** Updates the income estimates */
-    public updateIncomeEstimates() {
         this.incomeEstimates = this.iterateOverServers(this.incomeFormula);
-    }
-
-    /** Updates the cost estimates */
-    public updateCostEstimates() {
         this.costEstimates = this.iterateOverServers(this.costFormula);
-    }
-
-    /** Gets the current target that the evaluator says is best */
-    public getTarget(): Server {
         const best = this.incomeEstimates.reduce(
             (best, val, idx) =>
                 val > best.value ? { value: val, index: idx } : best,
             { value: this.incomeEstimates[0], index: 0 },
         );
-        return serverUtilityModule.targetableServers[best.index];
+
+        if (
+            !this._target ||
+            this._target.hostname !=
+                serverUtilityModule.targetableServers[best.index].hostname
+        ) {
+            this.stage = 0;
+        }
+        this._target = serverUtilityModule.targetableServers[best.index];
     }
 
-    /**
-     * Get the policy the evaluator says is best
-     * @param ramAllocation Amount of ram to allocate to this
-     * @returns The new policy
-     */
-    public updatePolicy(ramAllocation: number): HackingPolicy {
-        return this.getPolicy(ramAllocation, this.getTarget());
+    get target(): Server {
+        if (this._target) {
+            return this._target;
+        } else {
+            return this.ns!.getServer('home');
+        }
     }
 
     /**
      * Get the number of batches to aim for
      * @param weakenTime Weaken time (one full cycle time)
+     * @param structure Structure being used
      * @returns Number of batches to aim for
      */
-    public getBatches(weakenTime: number): number {
+    protected static getBatches(
+        weakenTime: number,
+        structure: HackScriptType[],
+    ): number {
         let maxBatches = Math.floor(
-            weakenTime /
-                (this.structure.length - 1) /
-                minimalTimeBetweenPerPair,
+            weakenTime / (structure.length - 1) / minimalTimeBetweenPerPair,
         );
         maxBatches = Math.min(maxBatches, 51);
         while (
             maxBatches > 0 &&
-            ((maxBatches % 4 === 0 && 'grow' in this.structure) ||
-                (maxBatches % 5 === 0 && 'hack' in this.structure))
+            ((maxBatches % 4 === 0 && 'grow' in structure) ||
+                (maxBatches % 5 === 0 && 'hack' in structure))
         ) {
             maxBatches--;
         }
@@ -238,127 +249,255 @@ export class HackingEvaluator {
         return maxBatches;
     }
 
-    /**
-     * Gets the approximation for sequencing, should be safe
-     * @param target target server
-     * @param batches number of batches
-     * @param ramAllocation total amount of ram to use
-     * @returns
-     */
-    public getSequence(
+    protected static getSequenceInitailizer(
+        ns: NS,
         target: Server,
         batches: number,
         ramAllocation: number,
-    ): HackingScript[] {
-        const player = this.ns.getPlayer();
+    ): [number, number, number, number] {
+        const player = ns.getPlayer();
         const ramPerBatch = ramAllocation / batches;
         const totalWeakenCount = Math.ceil(
             (ramPerBatch / weakenScriptSize) * weakenRatio + 2,
         );
         const hackPercent = HackingUtilityFunctions.hackPercent(
-            this.ns,
+            ns,
             target,
             player,
         );
         const growPercent = HackingUtilityFunctions.growPercent(
-            this.ns,
+            ns,
             target,
             1,
             player,
         );
-        if ('hack' in this.structure && 'grow' in this.structure) {
-            let hackCount =
-                (Math.floor(
-                    (ramPerBatch - totalWeakenCount * weakenScriptSize) /
-                        growScriptSize,
-                ) *
-                    Math.log(growPercent)) /
-                (Math.log(growPercent) - Math.log(hackPercent));
-            let growCount = Math.floor(
-                (ramPerBatch -
-                    totalWeakenCount * weakenScriptSize +
-                    hackCount * hackScriptSize) /
-                    growScriptSize,
-            );
-            let totalMulti =
-                Math.pow(hackPercent, hackCount) *
-                Math.pow(growPercent, growCount);
-            let extraRam =
-                ramPerBatch -
-                totalWeakenCount * weakenScriptSize -
-                hackCount * hackScriptSize -
-                growCount * weakenScriptSize;
-            let hackWeakens = Math.ceil(hackCount * weakenRatio);
-            let growWeakens = Math.ceil(growCount * weakenRatio);
-            if (
-                totalMulti < 1 ||
-                extraRam < 0 ||
-                hackWeakens + growWeakens > totalWeakenCount
-            ) {
-                this.ns.tprint('Super fatal error in getSequence()');
-            }
-            // TODO: Maybe we can make a better approx? this should be close.
-            return [
-                { script: 'hack', threads: hackCount },
-                { script: 'weaken', threads: hackWeakens },
-                { script: 'grow', threads: growCount },
-                { script: 'weaken', threads: growWeakens },
-            ];
-        } else if ('hack' in this.structure) {
-            let hackCount = Math.floor(
-                (ramPerBatch - totalWeakenCount * weakenScriptSize) /
-                    hackScriptSize,
-            );
-            return [
-                { script: 'hack', threads: hackCount },
-                { script: 'weaken', threads: totalWeakenCount },
-            ];
-        } else {
-            let growCount = Math.floor(
-                (ramPerBatch - totalWeakenCount * weakenScriptSize) /
-                    growScriptSize,
-            );
-            return [
-                { script: 'grow', threads: growCount },
-                { script: 'weaken', threads: totalWeakenCount },
-            ];
-        }
+        return [ramPerBatch, totalWeakenCount, hackPercent, growPercent];
     }
 
     /**
-     * Get the policy the evaluator says is best for a target, semi-static
-     * @param ramAllocation Amount of ram to allocate to this
+     * Gets the approximation for sequencing a hack-weaken-grow-weaken, should be safe
      * @param target target server
-     * @returns The new policy
+     * @param batches number of batches
+     * @param ramAllocation total amount of ram to use
+     * @returns
      */
-    public getPolicy(ramAllocation: number, target: Server): HackingPolicy {
-        const weakenTime = this.ns.getWeakenTime(target.hostname);
-        const batches = this.getBatches(weakenTime);
-        const sequence = this.getSequence(target, batches, ramAllocation);
-        return {
-            target: target,
-            spacing: weakenTime / batches,
-            sequence: sequence,
-        };
+    protected static getSequenceHWGW(
+        ns: NS,
+        target: Server,
+        batches: number,
+        ramAllocation: number,
+    ): HackingScript[] {
+        const [ramPerBatch, totalWeakenCount, hackPercent, growPercent] =
+            this.getSequenceInitailizer(ns, target, batches, ramAllocation);
+
+        let hackCount =
+            (Math.floor(
+                (ramPerBatch - totalWeakenCount * weakenScriptSize) /
+                    growScriptSize,
+            ) *
+                Math.log(growPercent)) /
+            (Math.log(growPercent) - Math.log(hackPercent));
+        let growCount = Math.floor(
+            (ramPerBatch -
+                totalWeakenCount * weakenScriptSize +
+                hackCount * hackScriptSize) /
+                growScriptSize,
+        );
+        let totalMulti =
+            Math.pow(hackPercent, hackCount) * Math.pow(growPercent, growCount);
+        let extraRam =
+            ramPerBatch -
+            totalWeakenCount * weakenScriptSize -
+            hackCount * hackScriptSize -
+            growCount * weakenScriptSize;
+        let hackWeakens = Math.ceil(hackCount * weakenRatio);
+        let growWeakens = Math.ceil(growCount * weakenRatio);
+        if (
+            totalMulti < 1 ||
+            extraRam < 0 ||
+            hackWeakens + growWeakens > totalWeakenCount
+        ) {
+            ns.tprint('Super fatal error in getSequence()');
+        }
+        // TODO: Maybe we can make a better approx? this should be close.
+        return [
+            { script: 'hack', threads: hackCount },
+            { script: 'weaken', threads: hackWeakens },
+            { script: 'grow', threads: growCount },
+            { script: 'weaken', threads: growWeakens },
+        ];
+    }
+
+    /**
+     * Gets the approximation for sequencing a hack-weaken, should be safe
+     * @param target target server
+     * @param batches number of batches
+     * @param ramAllocation total amount of ram to use
+     * @returns
+     */
+    protected static getSequenceHW(
+        ns: NS,
+        target: Server,
+        batches: number,
+        ramAllocation: number,
+    ): HackingScript[] {
+        const [ramPerBatch, totalWeakenCount, hackPercent, growPercent] =
+            this.getSequenceInitailizer(ns, target, batches, ramAllocation);
+
+        let hackCount = Math.floor(
+            (ramPerBatch - totalWeakenCount * weakenScriptSize) /
+                hackScriptSize,
+        );
+        return [
+            { script: 'hack', threads: hackCount },
+            { script: 'weaken', threads: totalWeakenCount },
+        ];
+    }
+
+    /**
+     * Gets the approximation for sequencing a grow-weaken, should be safe
+     * @param target target server
+     * @param batches number of batches
+     * @param ramAllocation total amount of ram to use
+     * @returns
+     */
+    protected static getSequenceGW(
+        ns: NS,
+        target: Server,
+        batches: number,
+        ramAllocation: number,
+    ): HackingScript[] {
+        const [ramPerBatch, totalWeakenCount, hackPercent, growPercent] =
+            this.getSequenceInitailizer(ns, target, batches, ramAllocation);
+
+        let growCount = Math.floor(
+            (ramPerBatch - totalWeakenCount * weakenScriptSize) /
+                growScriptSize,
+        );
+        return [
+            { script: 'grow', threads: growCount },
+            { script: 'weaken', threads: totalWeakenCount },
+        ];
+    }
+
+    /** Get the policy for this evaluator at the moment */
+    public abstract getPolicy(): HackingPolicy | undefined;
+}
+
+class MoneyEvaluator extends HackingEvaluator {
+    public getPolicy(): HackingPolicy | undefined {
+        switch (this.stage) {
+            case -1:
+                return;
+            case 0:
+                if (
+                    this.ns!.getServerSecurityLevel(this._target!.hostname) ===
+                    this.ns!.getServerMinSecurityLevel(this._target!.hostname)
+                ) {
+                    this.stage = 1;
+                } else {
+                    return { target: this._target!, spacing: 0, sequence: [] };
+                }
+            case 1:
+                if (
+                    this.ns!.getServerMoneyAvailable(this._target!.hostname) ===
+                    this.ns!.getServerMaxMoney(this._target!.hostname)
+                ) {
+                    this.stage = 2;
+                } else {
+                    const weakenTime = this.ns!.getWeakenTime(
+                        this._target!.hostname,
+                    );
+                    const batches = HackingEvaluator.getBatches(
+                        weakenTime,
+                        gwStructure,
+                    );
+                    return {
+                        target: this._target!,
+                        spacing: weakenTime / batches,
+                        sequence: HackingEvaluator.getSequenceGW(
+                            this.ns!,
+                            this._target!,
+                            batches,
+                            this.ramAllocation,
+                        ),
+                    };
+                }
+            case 2:
+                const weakenTime = this.ns!.getWeakenTime(
+                    this._target!.hostname,
+                );
+                const batches = HackingEvaluator.getBatches(
+                    weakenTime,
+                    hwgwStructure,
+                );
+                return {
+                    target: this._target!,
+                    spacing: weakenTime / batches,
+                    sequence: HackingEvaluator.getSequenceHWGW(
+                        this.ns!,
+                        this._target!,
+                        batches,
+                        this.ramAllocation,
+                    ),
+                };
+            default:
+                throw new Error(`${this.stage}`);
+        }
+    }
+}
+
+class ExpEvaluator extends HackingEvaluator {
+    public getPolicy(): HackingPolicy | undefined {
+        switch (this.stage) {
+            case -1:
+                return;
+            case 0:
+                if (
+                    this.ns!.getServerSecurityLevel(this._target!.hostname) ===
+                    this.ns!.getServerMinSecurityLevel(this._target!.hostname)
+                ) {
+                    this.stage = 1;
+                } else {
+                    return { target: this._target!, spacing: 0, sequence: [] };
+                }
+            case 1:
+                const weakenTime = this.ns!.getWeakenTime(
+                    this._target!.hostname,
+                );
+                const batches = HackingEvaluator.getBatches(
+                    weakenTime,
+                    hwStructure,
+                );
+                return {
+                    target: this._target!,
+                    spacing: weakenTime / batches,
+                    sequence: HackingEvaluator.getSequenceHW(
+                        this.ns!,
+                        this._target!,
+                        batches,
+                        this.ramAllocation,
+                    ),
+                };
+            default:
+                throw new Error(`${this.stage}`);
+        }
     }
 }
 
 export class HackingUtilityModule extends BaseModule {
-    /** How our ram should be partitioned by decimal */
-    ramProportioningTargets?: { money: number; exp: number; share: number };
-
-    /** Evaluator for growing */
-    growEvaluation?: HackingEvaluator;
     /** Evaluator for hacking for money */
-    moneyEvaluation?: HackingEvaluator;
+    moneyEvaluation: MoneyEvaluator = new MoneyEvaluator();
     /** Evaluator for hacking for exp */
-    expEvaluation?: HackingEvaluator;
+    expEvaluation: ExpEvaluator = new ExpEvaluator();
+    /** Amount of RAM to do sharing with */
+    shareRam: number = 0;
     //stockEvaulation?: HackingEvaulation
 
     init(ns: NS) {
         super.init(ns);
 
-        this.growEvaluation = new HackingEvaluator(
+        this.moneyEvaluation.init(
             this.ns,
             (server: Server) => {
                 // TODO: Make this evaulation take into account grow costs
@@ -379,15 +518,8 @@ export class HackingUtilityModule extends BaseModule {
                 );
             },
             (server: Server) => 0,
-            growStructure,
         );
-        this.moneyEvaluation = new HackingEvaluator(
-            this.ns,
-            (server: Server) => 0,
-            (server: Server) => 0,
-            moneyStructure,
-        );
-        this.expEvaluation = new HackingEvaluator(
+        this.expEvaluation.init(
             this.ns,
             (server: Server) => {
                 const player = ns.getPlayer();
@@ -407,17 +539,16 @@ export class HackingUtilityModule extends BaseModule {
                 );
             },
             (server: Server) => 0,
-            expStructure,
         );
     }
 
     @BackgroundTask(60_000)
-    /** Updates the list of growing targets */
-    growUpdate() {
-        this.growEvaluation!.update();
+    /** Updates the list of money targets */
+    moneyUpdate() {
+        this.moneyEvaluation!.update();
     }
     @BackgroundTask(60_000)
-    /** Updates the list of growing targets */
+    /** Updates the list of exp targets */
     expUpdate() {
         this.expEvaluation!.update();
     }
@@ -425,10 +556,18 @@ export class HackingUtilityModule extends BaseModule {
     @BackgroundTask(120_000)
     /** Updates the ram proportioning breakdown */
     decideRamProportioning() {
-        if (!this.ramProportioningTargets) {
-            this.ramProportioningTargets = { money: 0, exp: 0.8, share: 0.2 };
+        if (this.shareRam === 0) {
+            this.moneyEvaluation!.ramAllocation =
+                serverUtilityModule.totalServerRam * 0;
+            this.expEvaluation!.ramAllocation =
+                serverUtilityModule.totalServerRam * 0.8;
+            this.shareRam = serverUtilityModule.totalServerRam; // * .2
         } else {
-            this.ramProportioningTargets = { money: 0.6, exp: 0.2, share: 0.2 };
+            this.moneyEvaluation!.ramAllocation =
+                serverUtilityModule.totalServerRam * 0.6;
+            this.expEvaluation!.ramAllocation =
+                serverUtilityModule.totalServerRam * 0.2;
+            this.shareRam = serverUtilityModule.totalServerRam; // * .2
         }
     }
 }

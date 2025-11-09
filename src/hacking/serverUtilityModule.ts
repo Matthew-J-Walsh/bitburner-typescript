@@ -208,7 +208,7 @@ export class ServerUtilityModule extends BaseModule {
     /** Total available RAM
      * TODO: Speed me up
      */
-    public totalServerRam(): number {
+    get totalServerRam(): number {
         return (
             Array.from(this.ourServers.values()).reduce(
                 (acc, server) => acc + server.maxRam,

@@ -35,18 +35,19 @@ export type HackScriptType = 'hack' | 'grow' | 'weaken';
 /** Iterable for possible HackScriptTypes */
 export const hackScriptTypes = ['hack', 'grow', 'weaken'] as HackScriptType[];
 export type LoopedScriptType = 'weakenLooped' | 'share' | 'stanek';
+export type HackScriptRuntimes = { hack: number; grow: number; weaken: number };
 
 /** Structure of a grow batch */
-export const growStructure: HackScriptType[] = ['grow', 'weaken'];
+export const gwStructure: HackScriptType[] = ['grow', 'weaken'];
 /** Structure of a money batch */
-export const moneyStructure: HackScriptType[] = [
+export const hwgwStructure: HackScriptType[] = [
     'hack',
     'weaken',
     'grow',
     'weaken',
 ];
 /** Structure of a exp batch */
-export const expStructure: HackScriptType[] = ['hack', 'weaken'];
+export const hwStructure: HackScriptType[] = ['hack', 'weaken'];
 
 /** Struct for a combined hacking script and its thread count */
 export type HackingScript = {

@@ -23,6 +23,7 @@ import {
     HackingScript,
     scriptMapping,
     LoopedScriptType,
+    HackScriptRuntimes as HackScriptTimes,
 } from '/hacking/constants';
 
 /** Element of a hacking batch */
@@ -33,7 +34,8 @@ type HackingElement = {
     exec: (endTime: number) => number;
     /** Kill function for the element */
     kill: () => void;
-    //parent: //Use for debugging
+    /** Parent of the element, used for debugging... and to make sure it doesn't get GCed */
+    parent: HackingBatch;
 };
 
 /** A batch of hack scripts */
@@ -67,6 +69,7 @@ class HackingBatch {
                 exec: (endTime: number) =>
                     this.start(hscript.script, hscript.threads, endTime),
                 kill: () => this.killAll(),
+                parent: this,
             },
         ]);
     }
@@ -146,7 +149,7 @@ class FillerRamTask extends RamTaskManager {
         /** Method to kill with */
         protected kill: (pid: number) => void,
         /** Targeted amount of ram to consume */
-        protected targetRam: number,
+        protected targetRamGetter: () => number,
     ) {
         super();
         this.ramPerThread = this.ns.getScriptRam(this.scriptName);
@@ -155,18 +158,14 @@ class FillerRamTask extends RamTaskManager {
         }
     }
 
-    /** Updates the targeted ram of this filler */
-    public update(targetRam: number) {
-        this.targetRam = targetRam;
-    }
-
     /**
      * Primary management function
      * @returns Time to be yielded to next
      */
     public manage(): number {
         const threads = Math.floor(
-            Math.max(0, this.targetRam - this.managedRam) / this.ramPerThread,
+            Math.max(0, this.targetRamGetter() - this.managedRam) /
+                this.ramPerThread,
         );
         this.fill(threads).forEach((pid) => {
             const runningScript = this.ns.getRunningScript(pid)!; //TODO, we shouldn't need this call
@@ -219,7 +218,7 @@ class FillerRamTask extends RamTaskManager {
                 `Filler Ram Task Integrity Failure - Managed Ram Missmatch`,
             );
         }
-        if (this.managedRam > this.targetRam * 1.1) {
+        if (this.managedRam > this.targetRamGetter() * 1.1) {
             this.ns.tprint('Filler Ram Task Integrity Warning - OverRAM');
         }
     }
@@ -234,11 +233,9 @@ class WeakenRamTask extends FillerRamTask {
         /** Method to kill with */
         protected kill: (pid: number) => void,
         /** Targeted amount of ram to consume */
-        protected targetRam: number,
-        /** Server target */
-        public target: Server,
+        protected targetRamGetter: () => number,
     ) {
-        super(ns, scriptMapping['weaken'], fill, kill, targetRam);
+        super(ns, scriptMapping['weaken'], fill, kill, targetRamGetter);
         this.ramPerThread = this.ns.getScriptRam(this.scriptName);
     }
 
@@ -259,10 +256,16 @@ class WeakenRamTask extends FillerRamTask {
         this.managedScripts = new Map<string, number>();
         this.managedRam = 0;
     }
+
+    get isEmpty(): boolean {
+        return this.managedScripts.size === 0;
+    }
 }
 
 /** Task that handles creating new hacking batches */
-class HackingRamTask extends RamTaskManager {
+class HackingRamTaskNew extends RamTaskManager {
+    /** Weaken subtask */
+    private weakenRamTask?: WeakenRamTask;
     /** Next manage time */
     private nextManageTime: number = 0;
     /** When the next batch should be execed off */
@@ -282,24 +285,27 @@ class HackingRamTask extends RamTaskManager {
         protected ns: NS,
         /** Function to exec with */
         protected exec: (
+            target: string,
             script: HackScriptType,
             threads: number,
             endTime: number,
         ) => number,
+        /** Method to fill with */
+        protected fill: (target: string, threads: number) => number[],
         /** Function to kill with */
         protected kill: (pid: number) => void,
-        /** Target of hacking */
-        public target: Server,
         /** Function to exec when we needed to cancel a batch */
         protected missRecorder: () => void,
-        /** Function that gives us an up to date policy */
-        public getPolicy: () => HackingPolicy,
-        /** Funciton that checks if we are at minimum security */
-        protected checkSecurityLevel: () => boolean,
         /** Task type metadata */
-        public taskType: string,
+        protected evaluator: HackingEvaluator,
     ) {
         super();
+        this.weakenRamTask = new WeakenRamTask(
+            ns,
+            (threads: number) => fill(evaluator.target.hostname, threads),
+            kill,
+            () => evaluator.ramAllocation,
+        );
     }
 
     /**
@@ -308,53 +314,98 @@ class HackingRamTask extends RamTaskManager {
      */
     public manage(): number {
         const currentTime = Date.now();
-        if (currentTime <= this.nextManageTime) {
-            return this.nextManageTime;
-        }
-
-        if (!this.checkSecurityLevel()) {
-            return currentTime + securityFailureWaitTime;
-        }
-
-        const hackTime = this.ns.getHackTime(this.target.hostname);
-        const scriptTimes = {
-            hack: hackTime,
-            grow: 3.2 * hackTime,
-            weaken: 4 * hackTime,
-        };
-
-        const endTimes = {
-            hack: currentTime + scriptTimes.hack,
-            grow: currentTime + scriptTimes.grow,
-            weaken: currentTime + scriptTimes.weaken,
-        };
-
-        if (currentTime >= this.nextBatchInitializationTime) {
-            const policy = this.getPolicy();
-            this.startBatch(currentTime, scriptTimes, policy.sequence);
-            this.nextBatchInitializationTime = currentTime + policy.spacing;
-        }
-
-        const minTimes = hackScriptTypes.map((script: HackScriptType) => {
-            while (
-                (this.scriptQueues[script].peek()?.endTime ?? Infinity) <=
-                endTimes[script]
-            ) {
-                const elem = this.scriptQueues[script].pop()!;
-                if (elem.endTime + batchMaximumDelay > endTimes[script]) {
-                    elem.exec(endTimes[script]);
+        let policy;
+        switch (this.evaluator.stage) {
+            case -1:
+                return currentTime + defaultDelay;
+            case 0:
+                policy = this.evaluator.getPolicy()!;
+                if (policy.sequence.length === 0) {
+                    // We are still weakening
+                    this.reset();
+                    return this.weakenRamTask!.manage();
                 } else {
-                    elem.kill();
-                    this.missRecorder();
+                    this.weakenRamTask!.killAll();
+                    // No break as we are already stage 1 or 2
                 }
-            }
-            return (
-                (this.scriptQueues[script].peek()?.endTime ?? Infinity) -
-                scriptTimes[script]
-            );
-        });
+            default:
+                if (currentTime <= this.nextManageTime) {
+                    return this.nextManageTime;
+                }
 
-        return Math.min(currentTime + defaultDelay, ...minTimes);
+                const hackTime = this.ns.getHackTime(
+                    this.evaluator.target.hostname,
+                );
+                const scriptTimes = {
+                    hack: hackTime,
+                    grow: 3.2 * hackTime,
+                    weaken: 4 * hackTime,
+                };
+                const endTimes = {
+                    hack: currentTime + scriptTimes.hack,
+                    grow: currentTime + scriptTimes.grow,
+                    weaken: currentTime + scriptTimes.weaken,
+                };
+
+                if (currentTime >= this.nextBatchInitializationTime) {
+                    policy = policy ?? this.evaluator.getPolicy()!;
+                    this.startBatch(currentTime, scriptTimes, policy.sequence);
+                    this.nextBatchInitializationTime =
+                        currentTime + policy.spacing;
+                }
+
+                if (
+                    this.ns.getServerSecurityLevel(
+                        this.evaluator.target.hostname,
+                    ) !=
+                    this.ns.getServerMinSecurityLevel(
+                        this.evaluator.target.hostname,
+                    )
+                ) {
+                    return currentTime + securityFailureWaitTime;
+                }
+
+                const minTimes = hackScriptTypes.map(
+                    (script: HackScriptType) => {
+                        while (
+                            (this.scriptQueues[script].peek()?.endTime ??
+                                Infinity) <= endTimes[script]
+                        ) {
+                            const elem = this.scriptQueues[script].pop()!;
+                            if (
+                                elem.endTime + batchMaximumDelay >
+                                endTimes[script]
+                            ) {
+                                elem.exec(endTimes[script]);
+                            } else {
+                                elem.kill();
+                                this.missRecorder();
+                            }
+                        }
+                        return (
+                            (this.scriptQueues[script].peek()?.endTime ??
+                                Infinity) - scriptTimes[script]
+                        );
+                    },
+                );
+
+                this.nextManageTime = Math.min(
+                    currentTime + defaultDelay,
+                    ...minTimes,
+                );
+                return this.nextManageTime;
+        }
+    }
+
+    /**
+     * Cancel everything we can as we are switching targets
+     */
+    private reset() {
+        hackScriptTypes.map((script: HackScriptType) => {
+            while (this.scriptQueues[script].peek()) {
+                this.scriptQueues[script].pop()!.kill();
+            }
+        });
     }
 
     /**
@@ -368,7 +419,16 @@ class HackingRamTask extends RamTaskManager {
         scriptTimes: { hack: number; grow: number; weaken: number },
         sequencing: HackingScript[],
     ) {
-        const batch = new HackingBatch(this.exec, this.kill);
+        const batch = new HackingBatch(
+            (script: HackScriptType, threads: number, endTime: number) =>
+                this.exec(
+                    this.evaluator.target.hostname,
+                    script,
+                    threads,
+                    endTime,
+                ),
+            this.kill,
+        );
         batch
             .init(currentTime, scriptTimes, sequencing)
             .forEach(([script, element]) =>
@@ -376,49 +436,74 @@ class HackingRamTask extends RamTaskManager {
             );
     }
 
-    /** Verifies assumptions about this are true */
     public integrityCheck(): void {
-        if (
-            this.nextManageTime < Date.now() - 10_000 ||
-            this.nextBatchInitializationTime < Date.now() - 10_000
-        ) {
-            this.ns.tprint('Hacking Ram Task Integrity Warning - Overtime');
-        }
-        const hackArr = this.scriptQueues.weaken.toArray();
-        const growArr = this.scriptQueues.weaken.toArray();
-        const weakenArr = this.scriptQueues.weaken.toArray();
-        if (weakenArr.length > 2) {
-            this.ns.tprint('Hacking Ram Task Integrity Warning - Over Weaken');
-        }
-        if (
-            !hackArr.every(
-                (elem, idx) =>
-                    idx === 0 || hackArr[idx - 1].endTime <= elem.endTime,
-            )
-        ) {
-            throw new Error(
-                'Hacking Ram Task Integrity Error - Hack out of order',
-            );
-        }
-        if (
-            !growArr.every(
-                (elem, idx) =>
-                    idx === 0 || growArr[idx - 1].endTime <= elem.endTime,
-            )
-        ) {
-            throw new Error(
-                'Hacking Ram Task Integrity Error - Grow out of order',
-            );
-        }
-        if (
-            !weakenArr.every(
-                (elem, idx) =>
-                    idx === 0 || weakenArr[idx - 1].endTime <= elem.endTime,
-            )
-        ) {
-            throw new Error(
-                'Hacking Ram Task Integrity Error - Weaken out of order',
-            );
+        this.weakenRamTask!.integrityCheck();
+        switch (this.evaluator.stage) {
+            case -1:
+            case 0:
+                hackScriptTypes.forEach((script: HackScriptType) => {
+                    if (!this.scriptQueues[script].isEmpty) {
+                        throw new Error(
+                            'Hacking Ram Task Integrity Error - Queued Scripts while Weakening',
+                        );
+                    }
+                });
+            case 1:
+                if (!this.weakenRamTask!.isEmpty) {
+                    throw new Error(
+                        'Hacking Ram Task Integrity Error - Weakens while not Weakening',
+                    );
+                }
+
+                if (
+                    this.nextManageTime < Date.now() - 10_000 ||
+                    this.nextBatchInitializationTime < Date.now() - 10_000
+                ) {
+                    this.ns.tprint(
+                        'Hacking Ram Task Integrity Warning - Overtime',
+                    );
+                }
+                const hackArr = this.scriptQueues.weaken.toArray();
+                const growArr = this.scriptQueues.weaken.toArray();
+                const weakenArr = this.scriptQueues.weaken.toArray();
+                if (weakenArr.length > 2) {
+                    this.ns.tprint(
+                        'Hacking Ram Task Integrity Warning - Over Weaken',
+                    );
+                }
+                if (
+                    !hackArr.every(
+                        (elem, idx) =>
+                            idx === 0 ||
+                            hackArr[idx - 1].endTime <= elem.endTime,
+                    )
+                ) {
+                    throw new Error(
+                        'Hacking Ram Task Integrity Error - Hack out of order',
+                    );
+                }
+                if (
+                    !growArr.every(
+                        (elem, idx) =>
+                            idx === 0 ||
+                            growArr[idx - 1].endTime <= elem.endTime,
+                    )
+                ) {
+                    throw new Error(
+                        'Hacking Ram Task Integrity Error - Grow out of order',
+                    );
+                }
+                if (
+                    !weakenArr.every(
+                        (elem, idx) =>
+                            idx === 0 ||
+                            weakenArr[idx - 1].endTime <= elem.endTime,
+                    )
+                ) {
+                    throw new Error(
+                        'Hacking Ram Task Integrity Error - Weaken out of order',
+                    );
+                }
         }
     }
 }
@@ -609,14 +694,40 @@ class HackingSchedulerModule extends RamUsageSubmodule {
         super.init(ns);
 
         this.taskList = [
-            new RamTaskManager(),
-            new RamTaskManager(),
+            new HackingRamTaskNew(
+                ns,
+                (
+                    target: string,
+                    script: HackScriptType,
+                    threads: number,
+                    endTime: number,
+                ) => this.fire(target, script, threads, endTime),
+                (target: string, threads: number) =>
+                    this.fill('weakenLooped', threads, 0, target),
+                this.kill,
+                () => null,
+                hackingUtilityModule.moneyEvaluation,
+            ),
+            new HackingRamTaskNew(
+                ns,
+                (
+                    target: string,
+                    script: HackScriptType,
+                    threads: number,
+                    endTime: number,
+                ) => this.fire(target, script, threads, endTime),
+                (target: string, threads: number) =>
+                    this.fill('weakenLooped', threads, 0, target),
+                this.kill,
+                () => null,
+                hackingUtilityModule.expEvaluation,
+            ),
             new FillerRamTask(
                 ns,
                 'share',
                 (threads: number) => this.fill('share', threads, 2),
                 this.kill,
-                0,
+                () => hackingUtilityModule.shareRam,
             ),
         ];
     }
@@ -717,134 +828,11 @@ class HackingSchedulerModule extends RamUsageSubmodule {
             : null;
     }
 
-    /**
-     * Helper function to create new hack tasks
-     * @param target target of the hack task
-     * @param hackingEvaluator the evaluator associated with this hack task request
-     * @param getRamPercent function to get the percentage of ram to use for this task
-     * @param taskType metadata for the task
-     * @returns the new hack task
-     */
-    private createHackTask(
-        target: Server,
-        hackingEvaluator: HackingEvaluator,
-        getRamPercent: () => number,
-        taskType: string,
-    ): HackingRamTask {
-        const checkSecurity = () =>
-            this.ns.getServerSecurityLevel(target.hostname) ===
-            this.ns.getServerMinSecurityLevel(target.hostname);
-        return new HackingRamTask(
-            this.ns,
-            (script: HackScriptType, threads: number, endTime: number) =>
-                this.fire(target.hostname, script, threads, endTime),
-            this.kill,
-            target,
-            () => null,
-            () =>
-                hackingEvaluator.getPolicy(
-                    getRamPercent() * serverUtilityModule.totalServerRam(),
-                    target,
-                ),
-            () => checkSecurity(),
-            taskType,
-        );
-    }
-
     /** Primary loop, triggers everything */
     @PriorityTask
     manageActiveScripts(): number {
         super.manageActiveScripts();
         return Math.min(...this.taskList.map((task) => task.manage()));
-    }
-
-    /** Helper task to update the money strategy implementation */
-    @BackgroundTask(30_000)
-    updateMoney(): void {
-        const target = hackingUtilityModule.growEvaluation!.getTarget();
-        const task = this.taskList[0];
-        if (
-            (task instanceof HackingRamTask || task instanceof WeakenRamTask) &&
-            task.target === target
-        ) {
-            if (
-                task instanceof WeakenRamTask &&
-                this.ns.getServerSecurityLevel(target.hostname) ===
-                    this.ns.getServerMinSecurityLevel(target.hostname)
-            ) {
-                task.killAll();
-                this.taskList[0] = this.createHackTask(
-                    target,
-                    hackingUtilityModule.growEvaluation!,
-                    () => hackingUtilityModule.ramProportioningTargets!.money,
-                    'grow',
-                );
-            } else if (
-                task instanceof HackingRamTask &&
-                task.taskType === 'grow' &&
-                this.ns.getServerMoneyAvailable(target.hostname) ===
-                    this.ns.getServerMaxMoney(target.hostname)
-            ) {
-                // TODO: we can probably do better than this, we can stop growing earlier?
-                this.taskList[0] = this.createHackTask(
-                    target,
-                    hackingUtilityModule.moneyEvaluation!,
-                    () => hackingUtilityModule.ramProportioningTargets!.money,
-                    'money',
-                );
-            }
-        } else {
-            if (task instanceof WeakenRamTask) {
-                task.killAll();
-            }
-            this.taskList[0] = new WeakenRamTask(
-                this.ns,
-                (threads: number) =>
-                    this.fill('weakenLooped', threads, 0, target.hostname),
-                this.kill,
-                hackingUtilityModule.ramProportioningTargets!.money *
-                    serverUtilityModule.totalServerRam(),
-                target,
-            );
-        }
-    }
-
-    /** Helper task to update the exp strategy implementation */
-    @BackgroundTask(30_000)
-    updateExp(): void {
-        const target = hackingUtilityModule.expEvaluation!.getTarget();
-        const task = this.taskList[1];
-        if (
-            (task instanceof HackingRamTask || task instanceof WeakenRamTask) &&
-            task.target === target
-        ) {
-            if (
-                task instanceof WeakenRamTask &&
-                this.ns.getServerSecurityLevel(target.hostname) ===
-                    this.ns.getServerMinSecurityLevel(target.hostname)
-            ) {
-                task.killAll();
-                this.taskList[1] = this.createHackTask(
-                    target,
-                    hackingUtilityModule.expEvaluation!,
-                    () => hackingUtilityModule.ramProportioningTargets!.exp,
-                    'exp',
-                );
-            }
-        } else {
-            if (task instanceof WeakenRamTask) {
-                task.killAll();
-            }
-            this.taskList[1] = new WeakenRamTask(
-                this.ns,
-                (threads: number) =>
-                    this.fill('weakenLooped', threads, 1, target.hostname),
-                this.kill,
-                hackingUtilityModule.ramProportioningTargets!.exp *
-                    serverUtilityModule.totalServerRam(),
-                target,
-            );
-        }
     }
 
     @BackgroundTask(30_000)
