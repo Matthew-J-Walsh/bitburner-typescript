@@ -13,11 +13,18 @@ export class MoneyModule extends BaseModule {
     //Scuffed for now because w/e
     purchaseServers() {
         let [ramGained, cost] = serverUtilityModule.cheapestPurchasableServer();
-        return;
         while (this.ns.getPlayer().money > cost) {
-            serverUtilityModule.purchaseServer();
+            if (!serverUtilityModule.purchaseServer()) {
+                this.ns.tprint('Some dumb bug in MoneyModule');
+                break;
+            }
             [ramGained, cost] = serverUtilityModule.cheapestPurchasableServer();
         }
+    }
+    //@BackgroundTask(60_000)
+    //Scuffed for now because w/e
+    purchaseGangStuff() {
+        return;
     }
 }
 

@@ -23,8 +23,9 @@ import {
     HackingScript,
     scriptMapping,
     LoopedScriptType,
-    HackScriptRuntimes as HackScriptTimes,
+    deadZoneDelay,
 } from '/hacking/constants';
+import { approximatelyEqual } from '/lib/misc';
 
 /** Holds the information about an actively running script */
 type ActiveScript = {
@@ -68,6 +69,8 @@ class HackingBatch {
         /** Kill function to use */
         public kill: (pid: number) => void,
     ) {}
+    /** End time hard */
+    public hardEndTime?: number;
 
     public init(
         currentTime: number,
@@ -75,6 +78,10 @@ class HackingBatch {
         sequencing: HackingScript[],
     ): Array<[HackScriptType, HackingElement]> {
         const endTime = currentTime + times.weaken - 1;
+        this.hardEndTime =
+            endTime +
+            sequencing.length * batchInternalDelay +
+            batchMaximumDelay;
 
         return sequencing.map((hscript, idx) => [
             hscript.script,
@@ -102,7 +109,9 @@ class HackingBatch {
     ): number {
         if (!this.killed) {
             const pid = this.exec(script, threads, endTime);
-            this.controledScripts.push(pid);
+            if (pid !== 0) {
+                this.controledScripts.push(pid);
+            }
             return pid;
         }
         return 0;
@@ -202,14 +211,13 @@ class FillerRamTask extends RamTaskManager {
      */
     public freeServer(server: Server): number {
         if (this.managedScripts.has(server.hostname)) {
-            const threadsFreed = this.managedScripts.get(
-                server.hostname,
-            )!.threads;
+            const ascript = this.managedScripts.get(server.hostname)!;
             const success = this.kill(
                 this.managedScripts.get(server.hostname)!.pid,
             );
             this.managedScripts.delete(server.hostname);
-            return threadsFreed;
+            this.managedRam -= ascript.ramUsage;
+            return ascript.threads;
         } else {
             return 0;
         }
@@ -285,6 +293,11 @@ class WeakenRamTask extends FillerRamTask {
     }
 }
 
+type Deadzone = {
+    start: number;
+    end: number;
+};
+
 /** Task that handles creating new hacking batches */
 class HackingRamTask extends RamTaskManager {
     /** Weaken subtask */
@@ -303,6 +316,10 @@ class HackingRamTask extends RamTaskManager {
         grow: new LinkedList<HackingElement>(),
         weaken: new LinkedList<HackingElement>(),
     };
+    /** How many delays in a row */
+    private delayStreak: number = 0;
+    /** Deadzones */
+    private deadZones: LinkedList<Deadzone> = new LinkedList<Deadzone>();
 
     constructor(
         protected ns: NS,
@@ -318,7 +335,7 @@ class HackingRamTask extends RamTaskManager {
         /** Function to kill with */
         protected kill: (pid: number) => void,
         /** Function to exec when we needed to cancel a batch */
-        protected missRecorder: () => void,
+        protected missRecorder: (reason: string) => void,
         /** Task type metadata */
         protected evaluator: HackingEvaluator,
     ) {
@@ -370,11 +387,19 @@ class HackingRamTask extends RamTaskManager {
                     weaken: currentTime + scriptTimes.weaken,
                 };
 
-                if (currentTime >= this.nextBatchInitializationTime) {
-                    policy = policy ?? this.evaluator.getPolicy()!;
-                    this.startBatch(currentTime, scriptTimes, policy.sequence);
-                    this.nextBatchInitializationTime =
-                        currentTime + policy.spacing;
+                while ((this.deadZones.peek()?.end ?? Infinity) < currentTime) {
+                    //this.ns.tprint(
+                    //    `Popping deadzone from the queue: ${this.deadZones.peek()!.end} < ${currentTime}`,
+                    //);
+                    this.deadZones.pop()!;
+                }
+
+                if (
+                    this.deadZones.peek()?.start ??
+                    Infinity - deadZoneDelay < currentTime
+                ) {
+                    this.delayStreak += 1;
+                    return currentTime + securityFailureWaitTime;
                 }
 
                 if (
@@ -385,7 +410,20 @@ class HackingRamTask extends RamTaskManager {
                         this.evaluator.target.hostname,
                     )
                 ) {
-                    return currentTime + securityFailureWaitTime;
+                    throw new Error(
+                        `Wrong deadzones ${currentTime}, ${this.deadZones.peek()?.start}\n ${this.ns.getServerSecurityLevel(
+                            this.evaluator.target.hostname,
+                        )}`,
+                    );
+                    //this.delayStreak += 1;
+                    //return currentTime + securityFailureWaitTime;
+                }
+
+                if (currentTime >= this.nextBatchInitializationTime) {
+                    policy = policy ?? this.evaluator.getPolicy()!;
+                    this.startBatch(currentTime, scriptTimes, policy.sequence);
+                    this.nextBatchInitializationTime =
+                        currentTime + policy.spacing;
                 }
 
                 const minTimes = hackScriptTypes.map(
@@ -396,13 +434,33 @@ class HackingRamTask extends RamTaskManager {
                         ) {
                             const elem = this.scriptQueues[script].pop()!;
                             if (
-                                elem.endTime + batchMaximumDelay >
-                                endTimes[script]
+                                endTimes[script] <=
+                                elem.endTime + batchMaximumDelay
                             ) {
-                                elem.exec(endTimes[script]);
+                                if (elem.exec(endTimes[script]) === 0) {
+                                    elem.kill();
+                                    this.missRecorder('Exec missed');
+                                } else {
+                                    if (script === 'hack') {
+                                        //this.ns.tprint(
+                                        //    `adding deadzone: ${endTimes[script]}, ${elem.parent.hardEndTime!}`,
+                                        //);
+                                        this.deadZones.push({
+                                            start: Math.floor(endTimes[script]),
+                                            end: Math.ceil(
+                                                elem.parent.hardEndTime!,
+                                            ),
+                                        });
+                                    }
+                                    //this.ns.tprint(
+                                    //    `Starting a ${script} at time ${currentTime}, expected end time: ${endTimes[script]}, intended end time: ${elem.endTime}`,
+                                    //);
+                                }
                             } else {
                                 elem.kill();
-                                this.missRecorder();
+                                this.missRecorder(
+                                    `Overtime by ${endTimes[script] + batchMaximumDelay - elem.endTime}ms due to a late return of ${currentTime - this.nextManageTime}ms with a streak of ${this.delayStreak}`,
+                                );
                             }
                         }
                         return (
@@ -416,12 +474,14 @@ class HackingRamTask extends RamTaskManager {
                     currentTime + defaultDelay,
                     ...minTimes,
                 );
+                this.delayStreak = 0;
                 return this.nextManageTime;
         }
     }
 
     /**
-     * Cancel everything we can as we are switching targets
+     * Cancel everything we can as we are switching targets,
+     * Only use if switching targets
      */
     private reset() {
         hackScriptTypes.map((script: HackScriptType) => {
@@ -576,7 +636,6 @@ class RamUsageSubmodule extends BaseModule {
     /**
      * Updates all the server changes
      */
-    @BackgroundTask(60_000)
     update(): void {
         const thisScript = this.ns.getRunningScript()!;
         serverUtilityModule.ourServers.forEach((server) => {
@@ -636,6 +695,7 @@ class RamUsageSubmodule extends BaseModule {
      * @param pid script to kill
      */
     protected kill(pid: number): void {
+        //this.ns.tprint(`Killing pid: ${pid}`);
         const ascript = this.timedScriptHeap.removeByKey(pid);
         if (ascript) {
             this.clearActiveScript(ascript);
@@ -671,27 +731,27 @@ class RamUsageSubmodule extends BaseModule {
             );
         }
 
-        if (
-            !liveScripts.every((ascript) => {
-                const rscript = this.ns.getRunningScript(ascript.pid);
-                return rscript === null || rscript.ramUsage == ascript.ramUsage;
-            })
-        ) {
-            throw new Error(
-                'Ram Usage Submodule Integrity Error - Script Has Wrong Ram Usage',
-            );
-        }
-
-        if (
-            !liveScripts.every((ascript) => {
-                const rscript = this.ns.getRunningScript(ascript.pid);
-                return rscript === null || rscript.server == ascript.hostname;
-            })
-        ) {
-            throw new Error(
-                'Ram Usage Submodule Integrity Error - Script Has Wrong Server',
-            );
-        }
+        liveScripts.forEach((ascript) => {
+            const rscript = this.ns.getRunningScript(ascript.pid);
+            if (
+                !(
+                    rscript === null ||
+                    rscript.ramUsage * rscript.threads == ascript.ramUsage
+                )
+            ) {
+                throw new Error(
+                    `Ram Usage Submodule Integrity Error - Script Has Wrong Ram Usage ${JSON.stringify(ascript)}\n Correct ram: ${rscript.ramUsage * rscript.threads}`,
+                );
+            }
+        });
+        liveScripts.forEach((ascript) => {
+            const rscript = this.ns.getRunningScript(ascript.pid);
+            if (!(rscript === null || rscript.server == ascript.hostname)) {
+                throw new Error(
+                    `Ram Usage Submodule Integrity Error - Script Has Wrong Server ${JSON.stringify(ascript)}\n Correct server: ${rscript.server}`,
+                );
+            }
+        });
 
         this.priorityRamSpaceUsed.toArray().forEach((ramSpace) => {
             const maxRam = this.ns.getServerMaxRam(ramSpace.hostname);
@@ -704,9 +764,14 @@ class RamUsageSubmodule extends BaseModule {
             const expectedRamUsage = liveScripts
                 .filter((ascript) => ascript.hostname == ramSpace.hostname)
                 .reduce((acc, ascript) => acc + ascript.ramUsage, 0);
-            if (expectedRamUsage != ramSpace.totalRam - ramSpace.availableRam) {
+            if (
+                !approximatelyEqual(
+                    expectedRamUsage,
+                    ramSpace.totalRam - ramSpace.availableRam,
+                )
+            ) {
                 throw new Error(
-                    'Ram Usage Submodule Integrity Error - Too Much Ram Used',
+                    `Ram Usage Submodule Integrity Error - RAM Usage Differential: ${expectedRamUsage},  ${ramSpace.totalRam - ramSpace.availableRam}`,
                 );
             }
         });
@@ -751,7 +816,10 @@ class HackingSchedulerModule extends RamUsageSubmodule {
                 (target: string, threads: number) =>
                     this.fill('weakenLooped', threads, 0, target),
                 this.kill.bind(this),
-                () => null,
+                (reason: string) =>
+                    this.ns.tprint(
+                        `Miss on Money Making for reason: ${reason}`,
+                    ),
                 hackingUtilityModule.moneyEvaluation,
             ),
             new HackingRamTask(
@@ -765,7 +833,8 @@ class HackingSchedulerModule extends RamUsageSubmodule {
                 (target: string, threads: number) =>
                     this.fill('weakenLooped', threads, 1, target),
                 this.kill.bind(this),
-                () => null,
+                (reason: string) =>
+                    this.ns.tprint(`Miss on Exp Gen for reason: ${reason}`),
                 hackingUtilityModule.expEvaluation,
             ),
             new FillerRamTask(
@@ -776,6 +845,11 @@ class HackingSchedulerModule extends RamUsageSubmodule {
                 () => hackingUtilityModule.shareRam,
             ),
         ];
+    }
+
+    @BackgroundTask(60_000)
+    public update(): void {
+        super.update();
     }
 
     /**
@@ -796,6 +870,9 @@ class HackingSchedulerModule extends RamUsageSubmodule {
         const neededRam = this.ns.getScriptRam(scriptMapping[script]) * threads;
         const server = this.requestSingleRam(neededRam);
         if (server) {
+            //this.ns.tprint(
+            //    `Starting script ${scriptMapping[script]} on ${server.hostname} @${target} with ${threads} threads. Expected to end in ${endTime - Date.now()}ms. This will take ${neededRam} RAM`,
+            //);
             const pid = this.ns.exec(
                 scriptMapping[script],
                 server.hostname,
@@ -804,6 +881,20 @@ class HackingSchedulerModule extends RamUsageSubmodule {
                 endTime, //To make the call unique
                 ...args,
             );
+            //this.ns.tprint(`Pid of new script: ${pid}`);
+            if (pid === 0) {
+                this.ns.tprint(
+                    `Fire failed: 
+                        ${scriptMapping[script]},
+                        ${server.hostname},
+                        ${threads},
+                        ${target},
+                        ${endTime},
+                        ${args}
+                    `,
+                );
+                return 0;
+            }
             this.pushActiveScipt({
                 hostname: server.hostname,
                 threads: threads,
@@ -814,6 +905,7 @@ class HackingSchedulerModule extends RamUsageSubmodule {
 
             return pid;
         } else {
+            //throw new Error('Fuckass');
             return 0;
         }
     }
@@ -857,12 +949,21 @@ class HackingSchedulerModule extends RamUsageSubmodule {
 
             if (threads !== 0) {
                 //this.ns.tprint(`${filename}, ${hostname}, ${threads}, ${args}`);
+                const pid = this.ns.exec(filename, hostname, threads, ...args);
+                if (pid === 0) {
+                    this.ns.tprint(
+                        `Fill failed: ${
+                            filename
+                        }, ${hostname}, ${threads}, ${args}
+                    `,
+                    );
+                }
                 newPids.push({
                     hostname: hostname,
                     threads: threads,
                     ramUsage: threads * ramPerThread,
                     endTime: Infinity,
-                    pid: this.ns.exec(filename, hostname, threads, ...args),
+                    pid: pid,
                 });
             }
 
@@ -881,9 +982,15 @@ class HackingSchedulerModule extends RamUsageSubmodule {
         coreEffected?: boolean,
     ): Server | null {
         const result = this.priorityRamSpaceUsed.findNext(neededRam);
-        return result
-            ? serverUtilityModule.ourServers.get(result.hostname)!
-            : null;
+        if (result) {
+            const server = serverUtilityModule.ourServers.get(result.hostname)!;
+            for (let i = 2; i < this.taskList.length; i++) {
+                this.taskList[i].freeServer(server);
+            }
+            return server;
+        }
+        //throw new Error('Fuckass');
+        return null;
     }
 
     /** Primary loop, triggers everything */
@@ -893,7 +1000,7 @@ class HackingSchedulerModule extends RamUsageSubmodule {
         return Math.min(...this.taskList.map((task) => task.manage()));
     }
 
-    @BackgroundTask(30_000)
+    //@BackgroundTask(30_000)
     /** Verifies assumptions about this are true */
     public integrityCheck(): void {
         this.taskList.forEach((task) => task.integrityCheck());

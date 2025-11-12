@@ -25,7 +25,7 @@ export class ServerUtilityModule extends BaseModule {
     private futureTargetableServers: Array<Server> = [];
     /** Heap of purchased servers by RAM size */
     private purchasedServers: Heap<PurchasedServer> = new Heap<PurchasedServer>(
-        (a, b) => b.totalRam - a.totalRam,
+        (a, b) => a.totalRam - b.totalRam,
     );
     /** List of crackers */
     private crackers: { file: string; fn: (host: string) => boolean }[] = [];
@@ -71,15 +71,20 @@ export class ServerUtilityModule extends BaseModule {
             } else {
                 this.ourServers.set(servername, server);
                 this.ourHostnames.push(servername);
+                this.placeScriptsOnServer(server);
             }
-            if (server.hackDifficulty != null && server.hackDifficulty! > 0) {
+            if (
+                server.hackDifficulty != null &&
+                server.hackDifficulty! > 0 &&
+                server.purchasedByPlayer != true
+            ) {
                 if (server.hasAdminRights) {
                     this.targetableServers.push(server);
                 } else {
                     this.futureTargetableServers.push(server);
                 }
             }
-            if (server.purchasedByPlayer) {
+            if (server.purchasedByPlayer && server.hostname != 'home') {
                 this.purchasedServers.push({
                     hostname: servername,
                     totalRam: server.maxRam,
@@ -102,6 +107,7 @@ export class ServerUtilityModule extends BaseModule {
                     if (this.ns.nuke(server.hostname)) {
                         this.ourServers.set(server.hostname, server);
                         this.ourHostnames.push(server.hostname);
+                        this.placeScriptsOnServer(server);
                         return false;
                     } else {
                         this.ns.tprint(
@@ -135,17 +141,16 @@ export class ServerUtilityModule extends BaseModule {
     }
 
     /** Buys the least expensive RAM */
-    public purchaseServer(): void {
-        if (this.purchasedServers.size >= this.ns.getPurchasedServerLimit()) {
-            const hostname = this.ns.purchaseServer(
-                purchasedServerPrefix + `${this.purchasedServers.size}`,
-                2,
-            );
+    public purchaseServer(): boolean {
+        if (this.purchasedServers.size < this.ns.getPurchasedServerLimit()) {
+            const hostname = this.ns.purchaseServer(purchasedServerPrefix, 2);
             if (hostname === '') {
-                this.ns.tprint('purchaseServer() assertion failure');
+                this.ns.tprint('purchaseServer() assertion failure A');
+                return false;
             } else {
                 this.servers.set(hostname, this.serverUpdate(hostname));
                 this.ourServers.set(hostname, this.serverUpdate(hostname));
+                return true;
             }
         } else {
             const upgradeServer = this.purchasedServers.pop()!;
@@ -154,11 +159,12 @@ export class ServerUtilityModule extends BaseModule {
                 upgradeServer.totalRam * 2,
             );
             if (!success) {
-                this.ns.tprint('purchaseServer() assertion failure');
+                this.ns.tprint('purchaseServer() assertion failure B');
                 this.purchasedServers.push({
                     hostname: upgradeServer.hostname,
                     totalRam: upgradeServer.totalRam,
                 });
+                return false;
             } else {
                 this.purchasedServers.push({
                     hostname: upgradeServer.hostname,
@@ -173,6 +179,7 @@ export class ServerUtilityModule extends BaseModule {
                 upgradeServer.hostname,
                 this.serverUpdate(upgradeServer.hostname),
             ); //TODO: Is this needed?
+            return true;
         }
     }
 
@@ -181,19 +188,22 @@ export class ServerUtilityModule extends BaseModule {
      * @returns [ram gained, cost]
      */
     public cheapestPurchasableServer(): [number, number] {
-        const smallestRam = this.purchasedServers.peek()?.totalRam ?? 0;
-        const nextRam = smallestRam === 0 ? 2 : smallestRam * 2;
-        if (nextRam > this.ns.getPurchasedServerMaxRam()) {
-            return [0, 0];
+        if (this.purchasedServers.size < this.ns.getPurchasedServerLimit()) {
+            return [64, this.ns.getPurchasedServerCost(64)];
+        } else {
+            const nextUpgrade = this.purchasedServers.peek()!;
+            const nextRam = nextUpgrade.totalRam * 2;
+            if (nextRam > this.ns.getPurchasedServerMaxRam()) {
+                return [0, 0];
+            }
+            return [
+                nextRam,
+                this.ns.getPurchasedServerUpgradeCost(
+                    nextUpgrade.hostname,
+                    nextRam,
+                ),
+            ];
         }
-        const cost =
-            nextRam === 2
-                ? this.ns.getPurchasedServerCost(2)
-                : this.ns.getPurchasedServerUpgradeCost(
-                      this.purchasedServers.peek()!.hostname,
-                      nextRam,
-                  );
-        return [nextRam === 2 ? 2 : nextRam / 2, cost];
     }
 
     /** Upgrades the home ram */
@@ -218,18 +228,19 @@ export class ServerUtilityModule extends BaseModule {
      * Places scripts on a server to be run later
      * @param server Server
      */
-    public placeScriptsOnServer(server: Server) {
+    private placeScriptsOnServer(server: Server) {
         const scripts = [
-            '/scripts/hackScript.js',
-            '/scripts/growScript.js',
-            '/scripts/weakenScript.js',
-            '/scripts/shareScript.js',
-            '/scripts/stanekScript.js',
+            'scripts/growScript.js',
+            'scripts/hackScript.js',
+            'scripts/shareScript.js',
+            'scripts/stanekScript.js',
+            'scripts/weakenScript.js',
+            'scripts/weakenLoopedScript.js',
         ];
         scripts.forEach((script) => {
-            if (!this.ns.fileExists(script, server.hostname)) {
-                this.ns.scp(script, server.hostname);
-            }
+            //if (!this.ns.fileExists(script, server.hostname)) {
+            this.ns.scp(script, server.hostname);
+            //}
         });
     }
 

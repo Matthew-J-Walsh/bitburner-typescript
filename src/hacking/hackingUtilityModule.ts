@@ -13,8 +13,14 @@ import {
     hackScriptSize,
     growScriptSize,
     weakenScriptSize,
-    weakenRatio,
+    hackFort,
+    growFort,
+    weakenFort,
+    hackAvgCost,
+    growAvgCost,
+    scriptCosts,
 } from '/hacking/constants';
+import { lambertWApprox } from '/lib/math/lambertW';
 
 export type HackingPolicy = {
     /** Home for do nothing */
@@ -36,7 +42,7 @@ export class HackingUtilityFunctions {
         return 0;
     }
 
-    private static calculateServerGrowthLog(
+    static growPercentLog(
         ns: NS,
         server: Server,
         threads: number,
@@ -73,7 +79,7 @@ export class HackingUtilityFunctions {
         cores: number = 1,
     ): number {
         return Math.exp(
-            this.calculateServerGrowthLog(ns, server, threads, player, cores),
+            this.growPercentLog(ns, server, threads, player, cores),
         );
     }
 
@@ -91,7 +97,7 @@ export class HackingUtilityFunctions {
         if (targetMoney > moneyMax) targetMoney = moneyMax; // can't grow a server to more than its moneyMax
         if (targetMoney <= startMoney) return 0; // no growth --> no threads
 
-        const k = this.calculateServerGrowthLog(ns, server, 1, player, cores);
+        const k = this.growPercentLog(ns, server, 1, player, cores);
 
         const guess =
             (targetMoney - startMoney) /
@@ -159,6 +165,56 @@ export class HackingUtilityFunctions {
 
         return Math.min(1, Math.max(percentMoneyHacked, 0));
     }
+    static hackTime(server: Server, player: Player): number {
+        const difficultyMult =
+            server.requiredHackingSkill! * server.hackDifficulty!;
+
+        const baseDiff = 500;
+        const baseSkill = 50;
+        const diffFactor = 2.5;
+        let skillFactor = diffFactor * difficultyMult + baseDiff;
+        skillFactor /= player.skills.hacking + baseSkill;
+
+        const hackTimeMultiplier = 5;
+        const hackingTime =
+            (hackTimeMultiplier * skillFactor) /
+            (player.mults.hacking_speed *
+                1 * //currentNodeMults.HackingSpeedMultiplier
+                1); //calculateIntelligenceBonus(player.skills.intelligence, 1)
+
+        return hackingTime;
+    }
+
+    static hwgwSequencesFromHackCount(
+        ns: NS,
+        server: Server,
+        hackCount: number,
+    ): HackingScript[] | undefined {
+        const hackedFraction = ns.hackAnalyze(server.hostname) * hackCount;
+        if (hackedFraction > 1.0) {
+            //ns.tprint(`Overshoot: ${hackedFraction}`);
+            return;
+        }
+        const growthFactor = 1 / (1 - hackedFraction);
+        const growCount = Math.ceil(
+            ns.growthAnalyze(server.hostname, growthFactor),
+        );
+        const hackWeakens = Math.ceil((hackCount * hackFort) / weakenFort);
+        const growWeakens = Math.ceil((growCount * growFort) / weakenFort);
+        return [
+            { script: 'hack', threads: hackCount },
+            { script: 'weaken', threads: hackWeakens },
+            { script: 'grow', threads: growCount },
+            { script: 'weaken', threads: growWeakens },
+        ];
+    }
+
+    static sequenceRam(sequence: HackingScript[]): number {
+        return sequence.reduce(
+            (acc, script) => acc + scriptCosts[script.script] * script.threads,
+            0,
+        );
+    }
 }
 
 export abstract class HackingEvaluator {
@@ -178,6 +234,8 @@ export abstract class HackingEvaluator {
     public ramAllocation: number = 0;
     /** Stage of the evaluator */
     public stage: number = -1;
+    /** Last hwgw hack count */
+    public hwgwMemoHack: number = 1;
 
     public init(
         ns: NS,
@@ -234,9 +292,9 @@ export abstract class HackingEvaluator {
         structure: HackScriptType[],
     ): number {
         let maxBatches = Math.floor(
-            weakenTime / (structure.length - 1) / minimalTimeBetweenPerPair,
+            weakenTime / ((structure.length - 1) * minimalTimeBetweenPerPair),
         );
-        maxBatches = Math.min(maxBatches, 51);
+        maxBatches = Math.min(maxBatches, structure.length === 2 ? 51 : 23);
         while (
             maxBatches > 0 &&
             ((maxBatches % 4 === 0 && 'grow' in structure) ||
@@ -246,31 +304,6 @@ export abstract class HackingEvaluator {
         }
 
         return maxBatches;
-    }
-
-    protected static getSequenceInitailizer(
-        ns: NS,
-        target: Server,
-        batches: number,
-        ramAllocation: number,
-    ): [number, number, number, number] {
-        const player = ns.getPlayer();
-        const ramPerBatch = ramAllocation / batches;
-        const totalWeakenCount = Math.ceil(
-            (ramPerBatch / weakenScriptSize) * weakenRatio + 2,
-        );
-        const hackPercent = HackingUtilityFunctions.hackPercent(
-            ns,
-            target,
-            player,
-        );
-        const growPercent = HackingUtilityFunctions.growPercent(
-            ns,
-            target,
-            1,
-            player,
-        );
-        return [ramPerBatch, totalWeakenCount, hackPercent, growPercent];
     }
 
     /**
@@ -286,45 +319,55 @@ export abstract class HackingEvaluator {
         batches: number,
         ramAllocation: number,
     ): HackingScript[] {
-        const [ramPerBatch, totalWeakenCount, hackPercent, growPercent] =
-            this.getSequenceInitailizer(ns, target, batches, ramAllocation);
+        if (ramAllocation === 0) return [];
 
-        let hackCount =
-            (Math.floor(
-                (ramPerBatch - totalWeakenCount * weakenScriptSize) /
-                    growScriptSize,
-            ) *
-                Math.log(growPercent)) /
-            (Math.log(growPercent) - Math.log(hackPercent));
-        let growCount = Math.floor(
-            (ramPerBatch -
-                totalWeakenCount * weakenScriptSize +
-                hackCount * hackScriptSize) /
-                growScriptSize,
+        const ramPerBatch = ramAllocation / batches;
+        const player = ns.getPlayer();
+        const hackPercent = ns.hackAnalyze(target.hostname);
+        const growPercentLog = HackingUtilityFunctions.growPercentLog(
+            ns,
+            target,
+            1,
+            player,
         );
-        let totalMulti =
-            Math.pow(hackPercent, hackCount) * Math.pow(growPercent, growCount);
-        let extraRam =
-            ramPerBatch -
-            totalWeakenCount * weakenScriptSize -
-            hackCount * hackScriptSize -
-            growCount * weakenScriptSize;
-        let hackWeakens = Math.ceil(hackCount * weakenRatio);
-        let growWeakens = Math.ceil(growCount * weakenRatio);
-        if (
-            totalMulti < 1 ||
-            extraRam < 0 ||
-            hackWeakens + growWeakens > totalWeakenCount
-        ) {
-            ns.tprint('Super fatal error in getSequence()');
+
+        let hacks = Math.floor(
+            1 / hackPercent -
+                (growAvgCost / (growPercentLog * hackAvgCost)) *
+                    lambertWApprox(
+                        ((growPercentLog * hackAvgCost) /
+                            (growAvgCost * hackPercent)) *
+                            Math.pow(
+                                Math.exp(growPercentLog),
+                                (-1 * ramPerBatch) / growAvgCost,
+                            ) *
+                            Math.exp(
+                                (growPercentLog * hackAvgCost) /
+                                    (growAvgCost * hackPercent),
+                            ),
+                    ),
+        );
+        while (hacks * hackPercent > 0.9) {
+            hacks -= 1;
         }
-        // TODO: Maybe we can make a better approx? this should be close.
-        return [
-            { script: 'hack', threads: hackCount },
-            { script: 'weaken', threads: hackWeakens },
-            { script: 'grow', threads: growCount },
-            { script: 'weaken', threads: growWeakens },
-        ];
+        while (hacks > 0) {
+            let seq = HackingUtilityFunctions.hwgwSequencesFromHackCount(
+                ns,
+                target,
+                hacks,
+            );
+            if (!seq) return [];
+
+            let ram = HackingUtilityFunctions.sequenceRam(seq);
+            //ns.tprint(
+            //    `Looking at sequence with hacks=${hacks}, ram=${ram}, target=${ramPerBatch}`,
+            //);
+            if (ram <= ramPerBatch) {
+                return seq;
+            }
+            hacks -= 1;
+        }
+        return [];
     }
 
     /**
@@ -340,17 +383,31 @@ export abstract class HackingEvaluator {
         batches: number,
         ramAllocation: number,
     ): HackingScript[] {
-        const [ramPerBatch, totalWeakenCount, hackPercent, growPercent] =
-            this.getSequenceInitailizer(ns, target, batches, ramAllocation);
+        if (ramAllocation === 0) return [];
+        const ramPerBatch = ramAllocation / batches;
 
-        let hackCount = Math.floor(
-            (ramPerBatch - totalWeakenCount * weakenScriptSize) /
-                hackScriptSize,
-        );
-        return [
+        let hackCount = Math.floor(ramPerBatch / hackAvgCost);
+        if (hackCount === 0) return [];
+        let weakenCount = Math.ceil((hackCount * hackFort) / weakenFort);
+        if (!(Number.isInteger(hackCount) && Number.isInteger(weakenCount)))
+            throw new Error('WTF');
+        let seq: HackingScript[] = [
             { script: 'hack', threads: hackCount },
-            { script: 'weaken', threads: totalWeakenCount },
+            { script: 'weaken', threads: weakenCount },
         ];
+        if (HackingUtilityFunctions.sequenceRam(seq) > ramPerBatch * 1.1) {
+            throw new Error(
+                `WTF2 ${ramPerBatch} ${hackAvgCost}, ${hackCount} ${weakenCount}, ${HackingUtilityFunctions.sequenceRam(seq)}`,
+            );
+        }
+        if (hackCount === 0 || weakenCount === 0) {
+            throw new Error(
+                `WTF3: ${ramPerBatch}, ${hackAvgCost},
+                 ${hackCount}, ${weakenCount}`,
+            );
+        }
+
+        return seq;
     }
 
     /**
@@ -366,21 +423,63 @@ export abstract class HackingEvaluator {
         batches: number,
         ramAllocation: number,
     ): HackingScript[] {
-        const [ramPerBatch, totalWeakenCount, hackPercent, growPercent] =
-            this.getSequenceInitailizer(ns, target, batches, ramAllocation);
+        if (ramAllocation === 0) return [];
+        const ramPerBatch = ramAllocation / batches;
 
-        let growCount = Math.floor(
-            (ramPerBatch - totalWeakenCount * weakenScriptSize) /
-                growScriptSize,
-        );
-        return [
+        let growCount = Math.floor(ramPerBatch / growAvgCost);
+        if (growCount === 0) return [];
+        let weakenCount = Math.ceil((growCount * growFort) / weakenFort);
+        if (!(Number.isInteger(growCount) && Number.isInteger(weakenCount)))
+            throw new Error('WTF');
+        let seq: HackingScript[] = [
             { script: 'grow', threads: growCount },
-            { script: 'weaken', threads: totalWeakenCount },
+            { script: 'weaken', threads: weakenCount },
         ];
+        if (HackingUtilityFunctions.sequenceRam(seq) > ramPerBatch * 1.1) {
+            throw new Error(
+                `WTF2 ${ramPerBatch} ${growAvgCost}, ${growCount} ${weakenCount}, ${HackingUtilityFunctions.sequenceRam(seq)}`,
+            );
+        }
+        if (growCount === 0 || weakenCount === 0) {
+            throw new Error(
+                `WTF3: ${ramPerBatch}, ${growAvgCost}, ${growCount}, ${weakenCount}`,
+            );
+        }
+
+        return seq;
     }
 
     /** Get the policy for this evaluator at the moment */
     public abstract getPolicy(): HackingPolicy | undefined;
+
+    public log(): Record<string, any> {
+        const topTwo = this.incomeEstimates.reduce(
+            (topTwo, val, idx) =>
+                val > topTwo.best.value
+                    ? { best: { value: val, index: idx }, second: topTwo.best }
+                    : topTwo,
+            {
+                best: { value: this.incomeEstimates[0], index: 0 },
+                second: { value: this.incomeEstimates[0], index: 0 },
+            },
+        );
+        return {
+            stage: this.stage,
+            ramAllocation: this.ramAllocation,
+            policy: this.getPolicy(),
+            best: serverUtilityModule.targetableServers[topTwo.best.index],
+            bestValue: topTwo.best.value,
+            hghwBatches: HackingEvaluator.getBatches(
+                this.ns!.getWeakenTime(
+                    serverUtilityModule.targetableServers[topTwo.best.index]
+                        .hostname,
+                ),
+                hwgwStructure,
+            ),
+            second: serverUtilityModule.targetableServers[topTwo.second.index],
+            secondValue: topTwo.second.value,
+        };
+    }
 }
 
 class MoneyEvaluator extends HackingEvaluator {
@@ -499,21 +598,36 @@ export class HackingUtilityModule extends BaseModule {
         this.moneyEvaluation.init(
             this.ns,
             (server: Server) => {
-                // TODO: Make this evaulation take into account grow costs
+                const fakeServer = { ...server };
+                fakeServer.hackDifficulty = fakeServer.minDifficulty;
+                if (
+                    server.hackDifficulty !== server.minDifficulty &&
+                    fakeServer.hackDifficulty === server.hackDifficulty
+                )
+                    throw new Error('Copy error');
                 const player = ns.getPlayer();
+                const hackPercent = HackingUtilityFunctions.hackPercent(
+                    this.ns,
+                    fakeServer,
+                    player,
+                );
+                const growPercent = HackingUtilityFunctions.growPercent(
+                    this.ns,
+                    fakeServer,
+                    1,
+                    player,
+                );
                 return (
-                    (HackingUtilityFunctions.hackChance(
+                    (((HackingUtilityFunctions.hackChance(
                         this.ns,
-                        server,
+                        fakeServer,
                         player,
                     ) *
-                        HackingUtilityFunctions.hackPercent(
-                            this.ns,
-                            server,
-                            player,
-                        ) *
-                        server.moneyMax!) /
-                    this.ns.getHackTime(server.hostname)
+                        hackPercent *
+                        Math.log(growPercent)) /
+                        Math.log(growPercent / (1 - hackPercent))) *
+                        fakeServer.moneyMax!) /
+                    HackingUtilityFunctions.hackTime(fakeServer, player)
                 );
             },
             (server: Server) => 0,
@@ -521,20 +635,20 @@ export class HackingUtilityModule extends BaseModule {
         this.expEvaluation.init(
             this.ns,
             (server: Server) => {
+                const fakeServer = { ...server };
+                fakeServer.hackDifficulty = fakeServer.minDifficulty;
+                if (
+                    server.hackDifficulty !== server.minDifficulty &&
+                    fakeServer.hackDifficulty === server.hackDifficulty
+                )
+                    throw new Error('Copy error');
                 const player = ns.getPlayer();
                 return (
-                    (HackingUtilityFunctions.hackChance(
+                    HackingUtilityFunctions.hackExp(
                         this.ns,
-                        server,
+                        fakeServer,
                         player,
-                    ) *
-                        HackingUtilityFunctions.hackPercent(
-                            this.ns,
-                            server,
-                            player,
-                        ) *
-                        server.moneyMax!) /
-                    this.ns.getHackTime(server.hostname)
+                    ) / HackingUtilityFunctions.hackTime(fakeServer, player)
                 );
             },
             (server: Server) => 0,
@@ -552,10 +666,11 @@ export class HackingUtilityModule extends BaseModule {
         this.expEvaluation!.update();
     }
 
-    @BackgroundTask(120_000)
+    @BackgroundTask(300_000)
     /** Updates the ram proportioning breakdown */
     decideRamProportioning() {
-        if (this.shareRam === 0) {
+        if (false) {
+            //(this.shareRam === 0) {
             this.moneyEvaluation!.ramAllocation =
                 serverUtilityModule.totalServerRam * 0;
             this.expEvaluation!.ramAllocation =
@@ -563,21 +678,25 @@ export class HackingUtilityModule extends BaseModule {
             this.shareRam = serverUtilityModule.totalServerRam; // * .2
         } else {
             this.moneyEvaluation!.ramAllocation =
-                serverUtilityModule.totalServerRam * 0.6;
+                serverUtilityModule.totalServerRam * 0.8;
             this.expEvaluation!.ramAllocation =
-                serverUtilityModule.totalServerRam * 0.2;
+                serverUtilityModule.totalServerRam * 0.0;
             this.shareRam = serverUtilityModule.totalServerRam; // * .2
         }
     }
 
     public log(): Record<string, any> {
         return {
-            moneyStage: this.moneyEvaluation!.stage,
-            moneyTarget: this.moneyEvaluation!.target,
-            moneyRam: this.moneyEvaluation!.ramAllocation,
-            expStage: this.expEvaluation!.stage,
-            expTarget: this.expEvaluation!.target,
-            expRam: this.expEvaluation!.ramAllocation,
+            ...{ moneyEvaluation: this.moneyEvaluation.log() },
+            ...{ expEvaluation: this.expEvaluation.log() },
+            ...{
+                moneyStage: this.moneyEvaluation!.stage,
+                moneyTarget: this.moneyEvaluation!.target,
+                moneyRam: this.moneyEvaluation!.ramAllocation,
+                expStage: this.expEvaluation!.stage,
+                expTarget: this.expEvaluation!.target,
+                expRam: this.expEvaluation!.ramAllocation,
+            },
         };
     }
 }

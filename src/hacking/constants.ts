@@ -2,15 +2,17 @@
 export const purchasedServerPrefix = 'pserv-';
 
 /** Minimal time allowed between experience batches targeting the same target per pair TODO */
-export const minimalTimeBetweenPerPair = 500;
+export const minimalTimeBetweenPerPair = 4000;
 /** Default delay for hacking priority returns */
 export const defaultDelay = 5_000;
 /** Built in delay between batch starts */
 export const batchInternalDelay = 200;
 /** Maximum permissible time that a script can end without killing the batch */
-export const batchMaximumDelay = 100;
+export const batchMaximumDelay = batchInternalDelay / 2;
 /** Time to wait if we aren't at minimum security */
-export const securityFailureWaitTime = 10;
+export const securityFailureWaitTime = 5;
+/** Delay before a deadzone that we won't start a script */
+export const deadZoneDelay = batchInternalDelay;
 
 /** General script type */
 export type ScriptType =
@@ -22,12 +24,12 @@ export type ScriptType =
     | 'stanek';
 /** Mapping of ScriptTypes to their script */
 export const scriptMapping = {
-    hack: '/scripts/hackScript.js',
-    grow: '/scripts/growScript.js',
-    weaken: '/scripts/weakenScript.js',
-    weakenLooped: '/scripts/weakenLoopedScript.js',
-    share: '/scripts/shareScript.js',
-    stanek: '/scripts/stanekScript.js',
+    hack: 'scripts/hackScript.js',
+    grow: 'scripts/growScript.js',
+    weaken: 'scripts/weakenScript.js',
+    weakenLooped: 'scripts/weakenLoopedScript.js',
+    share: 'scripts/shareScript.js',
+    stanek: 'scripts/stanekScript.js',
 };
 /** Type for strings related to hacking scripts */
 export type HackScriptType = 'hack' | 'grow' | 'weaken';
@@ -62,4 +64,15 @@ export type Threads = number;
 export const hackScriptSize = 1.7;
 export const growScriptSize = 1.75;
 export const weakenScriptSize = 1.75;
-export const weakenRatio = 1.0 / 26.0;
+export const hackFort = 0.002;
+export const growFort = 0.004;
+export const weakenFort = 0.05;
+export const hackAvgCost =
+    hackScriptSize + (weakenScriptSize * hackFort) / weakenFort;
+export const growAvgCost =
+    growScriptSize + (weakenScriptSize * growFort) / weakenFort;
+export const scriptCosts = {
+    hack: 1.7,
+    grow: 1.75,
+    weaken: 1.75,
+};
