@@ -143,7 +143,7 @@ export class ServerUtilityModule extends BaseModule {
     /** Buys the least expensive RAM */
     public purchaseServer(): boolean {
         if (this.purchasedServers.size < this.ns.getPurchasedServerLimit()) {
-            const hostname = this.ns.purchaseServer(purchasedServerPrefix, 2);
+            const hostname = this.ns.purchaseServer(purchasedServerPrefix, 256);
             if (hostname === '') {
                 this.ns.tprint('purchaseServer() assertion failure A');
                 return false;
@@ -189,7 +189,7 @@ export class ServerUtilityModule extends BaseModule {
      */
     public cheapestPurchasableServer(): [number, number] {
         if (this.purchasedServers.size < this.ns.getPurchasedServerLimit()) {
-            return [64, this.ns.getPurchasedServerCost(64)];
+            return [256, this.ns.getPurchasedServerCost(256)];
         } else {
             const nextUpgrade = this.purchasedServers.peek()!;
             const nextRam = nextUpgrade.totalRam * 2;

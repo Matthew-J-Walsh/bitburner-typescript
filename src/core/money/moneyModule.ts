@@ -15,7 +15,9 @@ export class MoneyModule extends BaseModule {
         let [ramGained, cost] = serverUtilityModule.cheapestPurchasableServer();
         while (this.ns.getPlayer().money > cost) {
             if (!serverUtilityModule.purchaseServer()) {
-                this.ns.tprint('Some dumb bug in MoneyModule');
+                this.ns.tprint(
+                    `Some dumb bug in MoneyModule player=${this.ns.getPlayer().money}, ${cost}, ${ramGained}`,
+                );
                 break;
             }
             [ramGained, cost] = serverUtilityModule.cheapestPurchasableServer();

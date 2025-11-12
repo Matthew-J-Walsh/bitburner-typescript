@@ -316,8 +316,6 @@ class HackingRamTask extends RamTaskManager {
         grow: new LinkedList<HackingElement>(),
         weaken: new LinkedList<HackingElement>(),
     };
-    /** How many delays in a row */
-    private delayStreak: number = 0;
     /** Deadzones */
     private deadZones: LinkedList<Deadzone> = new LinkedList<Deadzone>();
 
@@ -398,8 +396,7 @@ class HackingRamTask extends RamTaskManager {
                     this.deadZones.peek()?.start ??
                     Infinity - deadZoneDelay < currentTime
                 ) {
-                    this.delayStreak += 1;
-                    return currentTime + securityFailureWaitTime;
+                    return this.deadZones.peek()!.end;
                 }
 
                 if (
@@ -459,7 +456,7 @@ class HackingRamTask extends RamTaskManager {
                             } else {
                                 elem.kill();
                                 this.missRecorder(
-                                    `Overtime by ${endTimes[script] + batchMaximumDelay - elem.endTime}ms due to a late return of ${currentTime - this.nextManageTime}ms with a streak of ${this.delayStreak}`,
+                                    `Overtime by ${endTimes[script] + batchMaximumDelay - elem.endTime}ms due to a late return of ${currentTime - this.nextManageTime}ms`,
                                 );
                             }
                         }
@@ -474,7 +471,6 @@ class HackingRamTask extends RamTaskManager {
                     currentTime + defaultDelay,
                     ...minTimes,
                 );
-                this.delayStreak = 0;
                 return this.nextManageTime;
         }
     }

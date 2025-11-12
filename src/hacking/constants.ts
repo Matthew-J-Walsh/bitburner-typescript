@@ -1,5 +1,5 @@
 /** Prefix for purchased servers */
-export const purchasedServerPrefix = 'pserv-';
+export const purchasedServerPrefix = 'pserv';
 
 /** Minimal time allowed between experience batches targeting the same target per pair TODO */
 export const minimalTimeBetweenPerPair = 4000;

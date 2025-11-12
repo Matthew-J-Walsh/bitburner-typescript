@@ -294,7 +294,7 @@ export abstract class HackingEvaluator {
         let maxBatches = Math.floor(
             weakenTime / ((structure.length - 1) * minimalTimeBetweenPerPair),
         );
-        maxBatches = Math.min(maxBatches, structure.length === 2 ? 51 : 23);
+        maxBatches = Math.min(maxBatches, structure.length === 2 ? 51 : 21);
         while (
             maxBatches > 0 &&
             ((maxBatches % 4 === 0 && 'grow' in structure) ||
@@ -466,7 +466,7 @@ export abstract class HackingEvaluator {
         return {
             stage: this.stage,
             ramAllocation: this.ramAllocation,
-            policy: this.getPolicy(),
+            policy: this.target ? this.getPolicy() : {},
             best: serverUtilityModule.targetableServers[topTwo.best.index],
             bestValue: topTwo.best.value,
             hghwBatches: HackingEvaluator.getBatches(
@@ -669,8 +669,7 @@ export class HackingUtilityModule extends BaseModule {
     @BackgroundTask(300_000)
     /** Updates the ram proportioning breakdown */
     decideRamProportioning() {
-        if (false) {
-            //(this.shareRam === 0) {
+        if (this.shareRam === 0 && false) {
             this.moneyEvaluation!.ramAllocation =
                 serverUtilityModule.totalServerRam * 0;
             this.expEvaluation!.ramAllocation =
@@ -678,9 +677,9 @@ export class HackingUtilityModule extends BaseModule {
             this.shareRam = serverUtilityModule.totalServerRam; // * .2
         } else {
             this.moneyEvaluation!.ramAllocation =
-                serverUtilityModule.totalServerRam * 0.8;
+                serverUtilityModule.totalServerRam * 0.6;
             this.expEvaluation!.ramAllocation =
-                serverUtilityModule.totalServerRam * 0.0;
+                serverUtilityModule.totalServerRam * 0.2;
             this.shareRam = serverUtilityModule.totalServerRam; // * .2
         }
     }
