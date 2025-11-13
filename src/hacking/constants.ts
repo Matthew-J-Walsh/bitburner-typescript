@@ -1,18 +1,23 @@
+//TODO:
+export type Time = number;
+export type ProcessID = number;
+export type Threads = number;
+
 /** Prefix for purchased servers */
 export const purchasedServerPrefix = 'pserv';
 
 /** Minimal time allowed between experience batches targeting the same target per pair TODO */
-export const minimalTimeBetweenPerPair = 4000;
+export const minimalTimeBetweenTwoScriptsEnding = 500;
 /** Default delay for hacking priority returns */
-export const defaultDelay = 5_000;
+export const maximalPeriodForHackingSchedulingFunctions = 5_000;
 /** Built in delay between batch starts */
 export const batchInternalDelay = 200;
 /** Maximum permissible time that a script can end without killing the batch */
-export const batchMaximumDelay = batchInternalDelay / 2;
+export const hackScriptMaximumPermissibleDelay = batchInternalDelay / 2;
 /** Time to wait if we aren't at minimum security */
-export const securityFailureWaitTime = 5;
+export const backupSecurityFailureSchedulingDelay = 5;
 /** Delay before a deadzone that we won't start a script */
-export const deadZoneDelay = batchInternalDelay;
+export const deadZonePadding = batchInternalDelay;
 
 /** General script type */
 export type ScriptType =
@@ -36,7 +41,7 @@ export type HackScriptType = 'hack' | 'grow' | 'weaken';
 /** Iterable for possible HackScriptTypes */
 export const hackScriptTypes = ['hack', 'grow', 'weaken'] as HackScriptType[];
 export type LoopedScriptType = 'weakenLooped' | 'share' | 'stanek';
-export type HackScriptRuntimes = { hack: number; grow: number; weaken: number };
+export type HackScriptRuntimes = { hack: Time; grow: Time; weaken: Time };
 
 /** Structure of a grow batch */
 export const gwStructure: HackScriptType[] = ['grow', 'weaken'];
@@ -53,13 +58,8 @@ export const hwStructure: HackScriptType[] = ['hack', 'weaken'];
 /** Struct for a combined hacking script and its thread count */
 export type HackingScript = {
     script: HackScriptType;
-    threads: number;
+    threads: Threads;
 };
-
-//TODO:
-export type Time = number;
-export type ProcessID = number;
-export type Threads = number;
 
 export const hackScriptSize = 1.7;
 export const growScriptSize = 1.75;

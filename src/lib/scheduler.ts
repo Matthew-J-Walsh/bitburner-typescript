@@ -21,7 +21,7 @@ export interface BackgroundTask {
     /** Name of scheduled task */
     name: string;
     /** Task to run */
-    fn: () => null | number;
+    fn: () => void | number;
     /** Time that the next run should occur '''after''' */
     nextRun: number;
     /** Interval to repeat the task */

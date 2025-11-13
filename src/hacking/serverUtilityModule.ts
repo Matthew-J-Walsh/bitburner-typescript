@@ -1,15 +1,20 @@
 import { NS, Server } from '@ns';
-import { BackgroundTask, PriorityTask } from '/lib/schedulingDecorators';
 import { BaseModule } from '/lib/baseModule';
-import { state } from '/lib/state';
 import { Heap } from '/lib/heap';
 import { purchasedServerPrefix, scriptMapping } from '/hacking/constants';
+import { BackgroundTask, PriorityTask } from '/lib/scheduler';
 
 type PurchasedServer = {
     hostname: string;
     totalRam: number;
 };
 
+/**
+ * ### ServerUtilityModule Uniqueness
+ * This modules handles server structural management. It roots servers and purchases servers.
+ * It provides access to lists of servers that are possible hacking targets.
+ * It provides aceces to lists of servers that can have their RAM utilized.
+ */
 export class ServerUtilityModule extends BaseModule {
     /** Full map of servers */
     public servers: Map<string, Server> = new Map<string, Server>();
@@ -32,8 +37,8 @@ export class ServerUtilityModule extends BaseModule {
     /** List of hooks for server updates */
     private serverUpdateHooks: Array<(server: Server) => void> = [];
 
-    public init(ns: NS) {
-        super.init(ns);
+    constructor(ns: NS) {
+        super(ns);
         this.fullServerScan();
         this.crackers = [
             { file: 'BruteSSH.exe', fn: this.ns.brutessh },
@@ -42,6 +47,27 @@ export class ServerUtilityModule extends BaseModule {
             { file: 'HTTPWorm.exe', fn: this.ns.httpworm },
             { file: 'SQLInject.exe', fn: this.ns.sqlinject },
         ];
+    }
+
+    public registerBackgroundTasks(): BackgroundTask[] {
+        return [
+            {
+                name: 'ServerUtilityModule.rootServers',
+                fn: this.rootServers.bind(this),
+                nextRun: 0,
+                interval: 300_000,
+            },
+            {
+                name: 'ServerUtilityModule.refreshTargetable',
+                fn: this.refreshTargetable.bind(this),
+                nextRun: 0,
+                interval: 300_000,
+            },
+        ];
+    }
+
+    public registerPriorityTasks(): PriorityTask[] {
+        return [];
     }
 
     /** Scans all servers, refreshing the server record */
@@ -66,6 +92,7 @@ export class ServerUtilityModule extends BaseModule {
                     queue.push(neighbor);
                 }
             });
+            this.ns.killall(server.hostname, true);
             if (server.hasAdminRights === false) {
                 this.futureRootableServers.push(server);
             } else {
@@ -94,7 +121,6 @@ export class ServerUtilityModule extends BaseModule {
     }
 
     /** Tries to root more servers */
-    @BackgroundTask(300_000)
     rootServers(): void {
         const crackers = this.crackers.filter((cracker) =>
             this.ns.fileExists(cracker.file, 'home'),
@@ -121,7 +147,6 @@ export class ServerUtilityModule extends BaseModule {
     }
 
     /** Refreshes targetable server list */
-    @BackgroundTask(300_000)
     refreshTargetable(): void {
         const currentHackingLevel = this.ns.getHackingLevel();
 
@@ -267,12 +292,3 @@ export class ServerUtilityModule extends BaseModule {
         };
     }
 }
-
-/**
- * ### ServerUtilityModule Uniqueness
- * This modules handles server structural management. It roots servers and purchases servers.
- * It provides access to lists of servers that are possible hacking targets.
- * It provides aceces to lists of servers that can have their RAM utilized.
- */
-export const serverUtilityModule = new ServerUtilityModule();
-state.push(serverUtilityModule);

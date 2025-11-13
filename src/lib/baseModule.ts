@@ -1,22 +1,19 @@
 import { NS } from '@ns';
-import {
-    registerPriorityTaskForModule,
-    registerBackgroundTaskForModule,
-} from '/lib/schedulingDecorators';
+import { BackgroundTask, PriorityTask } from './scheduler';
+
+/**
+ * Time before another priority task that background tasks are blocked in order to prevent overrun
+ */
+const backgroundBlockTime = 200;
 
 /** Base module for typing */
 export abstract class BaseModule {
-    protected ns!: NS;
+    constructor(protected ns: NS) {}
 
-    constructor() {}
-
-    /** Initializes the module */
-    public init(ns: NS) {
-        this.ns = ns;
-        ns.tprint('registering');
-        registerPriorityTaskForModule(this);
-        registerBackgroundTaskForModule(this);
-    }
+    /** Returns the background tasks for this module */
+    public abstract registerBackgroundTasks(): BackgroundTask[];
+    /** Returns the priority tasks for this module */
+    public abstract registerPriorityTasks(): PriorityTask[];
 
     /**
      * Optional module-specific logging hook.

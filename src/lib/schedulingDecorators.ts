@@ -98,8 +98,8 @@ export function registerBackgroundTaskForModule(module: BaseModule): void {
 //}
 
 /** Marks a property of a module to be tracked in the state */
-export function TrackProperty(target: BaseModule, propertyKey: string) {
-    const existing = trackedProperties.get(target) ?? [];
-    existing.push(propertyKey);
-    trackedProperties.set(target, existing);
-}
+//export function TrackProperty(target: BaseModule, propertyKey: string) {
+//    const existing = trackedProperties.get(target) ?? [];
+//    existing.push(propertyKey);
+//    trackedProperties.set(target, existing);
+//}

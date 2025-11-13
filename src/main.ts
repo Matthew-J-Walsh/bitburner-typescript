@@ -1,31 +1,54 @@
 import { NS } from '@ns';
-import { Scheduler } from '/lib/scheduler';
-import { priorityTasks, backgroundTasks } from '/lib/schedulingDecorators';
+import { BackgroundTask, PriorityTask, Scheduler } from '/lib/scheduler';
 import { BaseModule } from '/lib/baseModule';
-import { state, prepareStateForLogging } from '/lib/state';
 
 // Loaded modules:
-//import '/testing/testingModule';
-import '/lib/loggingModule';
-import '/hacking/serverUtilityModule';
-import '/hacking/hackingUtilityModule';
-import '/hacking/hackingModule';
-import '/core/money/moneyModule';
+//import { TestingModule, TestingModuleTwo } from '/testing/testingModule';
+import { LoggingModule } from '/lib/loggingModule';
+import { ServerUtilityModule } from './hacking/serverUtilityModule';
+import { HackingUtilityModule } from './hacking/hackingUtilityModule';
+import { HackingSchedulerModule } from './hacking/hackingModule';
+import { MoneyModule } from './core/money/moneyModule';
 
 export async function main(ns: NS) {
     ns.disableLog('ALL');
 
-    priorityTasks.length = 0;
-    backgroundTasks.length = 0;
+    const loggingModule = new LoggingModule(ns);
+    const serverUtilityModule = new ServerUtilityModule(ns);
+    const hackingUtilityModule = new HackingUtilityModule(
+        ns,
+        serverUtilityModule,
+    );
+    const hackingSchedulerModule = new HackingSchedulerModule(
+        ns,
+        serverUtilityModule,
+        hackingUtilityModule,
+    );
+    const moneyModule = new MoneyModule(ns, serverUtilityModule);
+    const allModules: BaseModule[] = [
+        loggingModule,
+        serverUtilityModule,
+        hackingUtilityModule,
+        hackingSchedulerModule,
+        moneyModule,
+    ];
+    loggingModule.init(allModules);
 
-    state.forEach((module: BaseModule) => module.init(ns));
-
-    prepareStateForLogging(ns);
+    const backgroundTasks = allModules.reduce(
+        (tasks: BackgroundTask[], module: BaseModule) =>
+            tasks.concat(module.registerBackgroundTasks()),
+        [],
+    );
+    const priorityTasks = allModules.reduce(
+        (tasks: PriorityTask[], module: BaseModule) =>
+            tasks.concat(module.registerPriorityTasks()),
+        [],
+    );
 
     const scheduler = new Scheduler(ns, priorityTasks, backgroundTasks);
 
     ns.tprint(
-        `Scheduler initialized with ${state.length} modules, ${priorityTasks.length} priority tasks, and ${backgroundTasks.length} background tasks.`,
+        `Scheduler initialized with ${priorityTasks.length} priority tasks, and ${backgroundTasks.length} background tasks.`,
     );
 
     while (true) {

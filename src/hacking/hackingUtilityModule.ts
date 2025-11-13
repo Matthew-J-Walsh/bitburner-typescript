@@ -1,10 +1,8 @@
 import { NS, Player, Server } from '@ns';
-import { BackgroundTask, PriorityTask } from '/lib/schedulingDecorators';
 import { BaseModule } from '/lib/baseModule';
-import { state } from '/lib/state';
-import { serverUtilityModule } from '/hacking/serverUtilityModule';
+import { ServerUtilityModule } from '/hacking/serverUtilityModule';
 import {
-    minimalTimeBetweenPerPair,
+    minimalTimeBetweenTwoScriptsEnding,
     HackScriptType,
     HackingScript,
     gwStructure,
@@ -21,6 +19,7 @@ import {
     scriptCosts,
 } from '/hacking/constants';
 import { lambertWApprox } from '/lib/math/lambertW';
+import { BackgroundTask, PriorityTask } from '/lib/scheduler';
 
 export type HackingPolicy = {
     /** Home for do nothing */
@@ -227,9 +226,10 @@ export class HackingUtilityFunctions {
         structure: HackScriptType[],
     ): number {
         let maxBatches = Math.floor(
-            weakenTime / ((structure.length - 1) * minimalTimeBetweenPerPair),
+            weakenTime /
+                ((structure.length - 1) * minimalTimeBetweenTwoScriptsEnding),
         );
-        maxBatches = Math.min(maxBatches, structure.length === 2 ? 51 : 21);
+        //maxBatches = Math.min(maxBatches, structure.length === 2 ? 51 : 21);
         while (
             maxBatches > 0 &&
             ((maxBatches % 4 === 0 && 'grow' in structure) ||
@@ -434,18 +434,6 @@ export class HackingUtilityFunctions {
 }
 
 export abstract class HackingEvaluator {
-    /** NS */
-    protected ns?: NS;
-    /** Income formula for this evaluator */
-    private incomeFormula: (server: Server, ramAllocation: number) => number = (
-        server: Server,
-        ramAllocation: number,
-    ) => 0;
-    /** Cost formula for this evaluator */
-    private costFormula: (server: Server, ramAllocation: number) => number = (
-        server: Server,
-        ramAllocation: number,
-    ) => 0;
     /** Estimated incomes of the different server options */
     private incomeEstimates: Array<number> = [];
     /** Estimated change costs of the different server options */
@@ -459,10 +447,17 @@ export abstract class HackingEvaluator {
     /** Last hwgw hack count */
     public hwgwMemoHack: number = 1;
 
-    public init(
-        ns: NS,
-        incomeFormula: (server: Server, ramAllocation: number) => number,
-        costFormula: (server: Server, ramAllocation: number) => number,
+    constructor(
+        protected ns: NS,
+        protected serverUtilityModule: ServerUtilityModule,
+        protected incomeFormula: (
+            server: Server,
+            ramAllocation: number,
+        ) => number,
+        protected costFormula: (
+            server: Server,
+            ramAllocation: number,
+        ) => number,
     ) {
         this.ns = ns;
         this.incomeFormula = incomeFormula;
@@ -472,7 +467,7 @@ export abstract class HackingEvaluator {
     protected iterateOverServers<T>(
         fn: (server: Server, ramAllocation: number) => T,
     ): Array<T> {
-        return serverUtilityModule.targetableServers.map((server) =>
+        return this.serverUtilityModule.targetableServers.map((server) =>
             fn(server, this.ramAllocation),
         );
     }
@@ -490,11 +485,11 @@ export abstract class HackingEvaluator {
         if (
             !this._target ||
             this._target.hostname !=
-                serverUtilityModule.targetableServers[best.index].hostname
+                this.serverUtilityModule.targetableServers[best.index].hostname
         ) {
             this.stage = 0;
         }
-        this._target = serverUtilityModule.targetableServers[best.index];
+        this._target = this.serverUtilityModule.targetableServers[best.index];
     }
 
     get target(): Server {
@@ -523,16 +518,19 @@ export abstract class HackingEvaluator {
             stage: this.stage,
             ramAllocation: this.ramAllocation,
             policy: this.target ? this.getPolicy() : {},
-            best: serverUtilityModule.targetableServers[topTwo.best.index],
+            best: this.serverUtilityModule.targetableServers[topTwo.best.index],
             bestValue: topTwo.best.value,
             hghwBatches: HackingUtilityFunctions.getBatches(
                 this.ns!.getWeakenTime(
-                    serverUtilityModule.targetableServers[topTwo.best.index]
-                        .hostname,
+                    this.serverUtilityModule.targetableServers[
+                        topTwo.best.index
+                    ].hostname,
                 ),
                 hwgwStructure,
             ),
-            second: serverUtilityModule.targetableServers[topTwo.second.index],
+            second: this.serverUtilityModule.targetableServers[
+                topTwo.second.index
+            ],
             secondValue: topTwo.second.value,
         };
     }
@@ -611,20 +609,28 @@ class ExpEvaluator extends HackingEvaluator {
     }
 }
 
+/**
+ * ### HackingUtilityModule Uniqueness
+ * This module decides the hacking strategy
+ */
 export class HackingUtilityModule extends BaseModule {
     /** Evaluator for hacking for money */
-    moneyEvaluation: MoneyEvaluator = new MoneyEvaluator();
+    moneyEvaluation!: MoneyEvaluator;
     /** Evaluator for hacking for exp */
-    expEvaluation: ExpEvaluator = new ExpEvaluator();
+    expEvaluation!: ExpEvaluator;
     /** Amount of RAM to do sharing with */
     shareRam: number = 0;
     //stockEvaulation?: HackingEvaulation
 
-    public init(ns: NS) {
-        super.init(ns);
+    constructor(
+        protected ns: NS,
+        protected serverUtilityModule: ServerUtilityModule,
+    ) {
+        super(ns);
 
-        this.moneyEvaluation.init(
+        this.moneyEvaluation = new MoneyEvaluator(
             this.ns,
+            this.serverUtilityModule,
             (server: Server, ramAllocation: number) => {
                 const fakeServer = { ...server };
                 fakeServer.hackDifficulty = fakeServer.minDifficulty;
@@ -633,21 +639,27 @@ export class HackingUtilityModule extends BaseModule {
                     fakeServer.hackDifficulty === server.hackDifficulty
                 )
                     throw new Error('Copy error');
-                return HackingUtilityFunctions.hackPolicyMoneyEval(
-                    this.ns,
-                    HackingUtilityFunctions.generateHackScriptPolicy(
+                try {
+                    return HackingUtilityFunctions.hackPolicyMoneyEval(
                         this.ns,
-                        server,
-                        ramAllocation,
-                        hwgwStructure,
-                        HackingUtilityFunctions.getSequenceHWGW,
-                    ),
-                );
+                        HackingUtilityFunctions.generateHackScriptPolicy(
+                            this.ns,
+                            server,
+                            ramAllocation,
+                            hwgwStructure,
+                            HackingUtilityFunctions.getSequenceHWGW,
+                        ),
+                    );
+                } catch (error) {
+                    //fix me lamo
+                    return -1;
+                }
             },
             (server: Server, ramAllocation: number) => 0,
         );
-        this.expEvaluation.init(
+        this.expEvaluation = new ExpEvaluator(
             this.ns,
+            this.serverUtilityModule,
             (server: Server, ramAllocation: number) => {
                 const fakeServer = { ...server };
                 fakeServer.hackDifficulty = fakeServer.minDifficulty;
@@ -656,7 +668,7 @@ export class HackingUtilityModule extends BaseModule {
                     fakeServer.hackDifficulty === server.hackDifficulty
                 )
                     throw new Error('Copy error');
-                return HackingUtilityFunctions.hackPolicyMoneyEval(
+                return HackingUtilityFunctions.hackPolicyExpEval(
                     this.ns,
                     HackingUtilityFunctions.generateHackScriptPolicy(
                         this.ns,
@@ -671,32 +683,56 @@ export class HackingUtilityModule extends BaseModule {
         );
     }
 
-    @BackgroundTask(60_000)
-    /** Updates the list of money targets */
-    moneyUpdate() {
-        this.moneyEvaluation!.update();
-    }
-    @BackgroundTask(60_000)
-    /** Updates the list of exp targets */
-    expUpdate() {
-        this.expEvaluation!.update();
+    public registerBackgroundTasks(): BackgroundTask[] {
+        return [
+            {
+                name: 'HackingUtilityModule.moneyUpdate',
+                fn: this.moneyUpdate.bind(this),
+                nextRun: Date.now() + 5_000,
+                interval: 60_000,
+            },
+            {
+                name: 'HackingUtilityModule.expUpdate',
+                fn: this.expUpdate.bind(this),
+                nextRun: Date.now() + 5_000,
+                interval: 60_000,
+            },
+            {
+                name: 'HackingUtilityModule.decideRamProportioning',
+                fn: this.decideRamProportioning.bind(this),
+                nextRun: 0,
+                interval: 60_000,
+            },
+        ];
     }
 
-    @BackgroundTask(600_000)
+    public registerPriorityTasks(): PriorityTask[] {
+        return [];
+    }
+
+    /** Updates the list of money targets */
+    moneyUpdate() {
+        this.moneyEvaluation.update();
+    }
+    /** Updates the list of exp targets */
+    expUpdate() {
+        this.expEvaluation.update();
+    }
+
     /** Updates the ram proportioning breakdown */
     decideRamProportioning() {
         if (this.shareRam === 0 && false) {
             this.moneyEvaluation!.ramAllocation =
-                serverUtilityModule.totalServerRam * 0;
+                this.serverUtilityModule.totalServerRam * 0;
             this.expEvaluation!.ramAllocation =
-                serverUtilityModule.totalServerRam * 0.8;
-            this.shareRam = serverUtilityModule.totalServerRam; // * .2
+                this.serverUtilityModule.totalServerRam * 0.8;
+            this.shareRam = this.serverUtilityModule.totalServerRam; // * .2
         } else {
-            this.moneyEvaluation!.ramAllocation =
-                serverUtilityModule.totalServerRam * 0.6;
-            this.expEvaluation!.ramAllocation =
-                serverUtilityModule.totalServerRam * 0.2;
-            this.shareRam = serverUtilityModule.totalServerRam; // * .2
+            this.moneyEvaluation.ramAllocation =
+                this.serverUtilityModule.totalServerRam * 0.6;
+            this.expEvaluation.ramAllocation =
+                this.serverUtilityModule.totalServerRam * 0.2;
+            this.shareRam = this.serverUtilityModule.totalServerRam; // * .2
         }
     }
 
@@ -705,20 +741,13 @@ export class HackingUtilityModule extends BaseModule {
             ...{ moneyEvaluation: this.moneyEvaluation.log() },
             ...{ expEvaluation: this.expEvaluation.log() },
             ...{
-                moneyStage: this.moneyEvaluation!.stage,
-                moneyTarget: this.moneyEvaluation!.target,
-                moneyRam: this.moneyEvaluation!.ramAllocation,
-                expStage: this.expEvaluation!.stage,
-                expTarget: this.expEvaluation!.target,
-                expRam: this.expEvaluation!.ramAllocation,
+                moneyStage: this.moneyEvaluation.stage,
+                moneyTarget: this.moneyEvaluation.target,
+                moneyRam: this.moneyEvaluation.ramAllocation,
+                expStage: this.expEvaluation.stage,
+                expTarget: this.expEvaluation.target,
+                expRam: this.expEvaluation.ramAllocation,
             },
         };
     }
 }
-
-/**
- * ### HackingUtilityModule Uniqueness
- * This module decides the hacking strategy
- */
-export const hackingUtilityModule = new HackingUtilityModule();
-state.push(hackingUtilityModule);

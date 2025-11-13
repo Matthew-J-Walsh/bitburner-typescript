@@ -1,52 +1,64 @@
 import { NS, Server, RunOptions, ScriptArg, RunningScript } from '@ns';
-import { BackgroundTask, PriorityTask } from '/lib/schedulingDecorators';
 import { BaseModule } from '/lib/baseModule';
-import { state } from '/lib/state';
-import { serverUtilityModule } from '/hacking/serverUtilityModule';
 import {
-    hackingUtilityModule,
     HackingPolicy,
     HackingEvaluator,
+    HackingUtilityModule,
 } from '/hacking/hackingUtilityModule';
 import { Heap } from '/lib/heap';
 import { SortedArray } from '/lib/sortedArray';
 import { LinkedList } from 'lib/linkedList';
 import { KeyedMinHeap } from '/lib/keyedHeap';
 import {
-    defaultDelay,
+    //Todo: Fix order
+    Time,
+    ProcessID,
+    Threads,
+    maximalPeriodForHackingSchedulingFunctions as maxPeriodForHackingSchedulingFunctions,
     batchInternalDelay,
-    batchMaximumDelay,
-    securityFailureWaitTime,
+    hackScriptMaximumPermissibleDelay,
+    backupSecurityFailureSchedulingDelay,
     HackScriptType,
+    HackScriptRuntimes,
     hackScriptTypes,
     ScriptType,
     HackingScript,
     scriptMapping,
     LoopedScriptType,
-    deadZoneDelay,
+    deadZonePadding,
 } from '/hacking/constants';
 import { approximatelyEqual } from '/lib/misc';
+import { ServerUtilityModule } from './serverUtilityModule';
+import { BackgroundTask, PriorityTask } from '/lib/scheduler';
 
 /** Holds the information about an actively running script */
 type ActiveScript = {
     /** Hostname the script is running on */
     hostname: string;
     /** Thread count */
-    threads: number;
+    threads: Threads;
     /** How much ram the script uses */
     ramUsage: number;
     /** The expected end time of the script */
-    endTime: number;
+    endTime: Time;
     /** Process id of the script */
-    pid: number;
+    pid: ProcessID;
+};
+
+/** Holds information about a deadzone (not at minimum security) for hacking a server */
+type Deadzone = {
+    /** When the deadzone will start */
+    start: Time;
+    /** When the deadzone will end */
+    end: Time;
 };
 
 /** Element of a hacking batch */
 type HackingElement = {
     /** Targeted end time of the element */
-    endTime: number;
+    endTime: Time;
     /** Executor function for the element */
-    exec: (endTime: number) => number;
+    exec: (delay: Time, endTime: Time) => ProcessID;
     /** Kill function for the element */
     kill: () => void;
     /** Parent of the element, used for debugging... and to make sure it doesn't get GCed */
@@ -56,39 +68,41 @@ type HackingElement = {
 /** A batch of hack scripts */
 class HackingBatch {
     /** Pids for scripts under this batch that have started */
-    private controledScripts: Array<number> = [];
+    private controledScripts: Array<ProcessID> = [];
     /** If the batch has been killed */
     public killed: boolean = false;
+    /** End time hard */
+    public hardEndTime?: Time;
+
     constructor(
         /** Executor function for this batch */
         public exec: (
             script: HackScriptType,
-            threads: number,
-            endTime: number,
-        ) => number,
+            threads: Threads,
+            delay: Time,
+            endTime: Time,
+        ) => ProcessID,
         /** Kill function to use */
-        public kill: (pid: number) => void,
+        public kill: (pid: ProcessID) => void,
     ) {}
-    /** End time hard */
-    public hardEndTime?: number;
 
     public init(
-        currentTime: number,
-        times: { hack: number; grow: number; weaken: number },
+        startTime: Time,
+        times: HackScriptRuntimes,
         sequencing: HackingScript[],
     ): Array<[HackScriptType, HackingElement]> {
-        const endTime = currentTime + times.weaken - 1;
+        const endTime = Math.ceil(startTime + times.weaken - 1);
         this.hardEndTime =
             endTime +
-            sequencing.length * batchInternalDelay +
-            batchMaximumDelay;
+            sequencing.length * batchInternalDelay + //TODO: This really should be 1 less than this
+            hackScriptMaximumPermissibleDelay;
 
         return sequencing.map((hscript, idx) => [
             hscript.script,
             {
                 endTime: endTime + idx * batchInternalDelay,
-                exec: (endTime: number) =>
-                    this.start(hscript.script, hscript.threads, endTime),
+                exec: (delay: Time, endTime: Time) =>
+                    this.start(hscript.script, hscript.threads, delay, endTime),
                 kill: () => this.killAll(),
                 parent: this,
             },
@@ -104,13 +118,16 @@ class HackingBatch {
      */
     private start(
         script: HackScriptType,
-        threads: number,
-        endTime: number,
-    ): number {
+        threads: Threads,
+        delay: Time,
+        endTime: Time,
+    ): ProcessID {
         if (!this.killed) {
-            const pid = this.exec(script, threads, endTime);
+            const pid = this.exec(script, threads, delay, endTime);
             if (pid !== 0) {
                 this.controledScripts.push(pid);
+            } else {
+                this.killAll();
             }
             return pid;
         }
@@ -137,8 +154,17 @@ class RamTaskManager {
      * Default primary manage function
      * @returns Time to be yielded to next
      */
-    public manage(): number {
-        return Date.now() + defaultDelay;
+    public manage(): Time {
+        return Date.now() + maxPeriodForHackingSchedulingFunctions;
+    }
+
+    /**
+     * Default checking server method, checks how many threads are running on the server
+     * @param server Server to check
+     * @returns Number of threads
+     */
+    public checkServer(server: Server): Threads {
+        return 0;
     }
 
     /**
@@ -146,7 +172,7 @@ class RamTaskManager {
      * @param server Server to free
      * @returns number of threads freed
      */
-    public freeServer(server: Server): number {
+    public freeServer(server: Server): Threads {
         return 0;
     }
 
@@ -175,9 +201,9 @@ class FillerRamTask extends RamTaskManager {
         /** Script file this filler will be filling with */
         protected scriptName: string,
         /** Method to fill with */
-        protected fill: (threads: number) => ActiveScript[],
+        protected fill: (threads: Threads) => ActiveScript[],
         /** Method to kill with */
-        protected kill: (pid: number) => void,
+        protected kill: (pid: ProcessID) => void,
         /** Targeted amount of ram to consume */
         protected targetRamGetter: () => number,
     ) {
@@ -192,7 +218,7 @@ class FillerRamTask extends RamTaskManager {
      * Primary management function
      * @returns Time to be yielded to next
      */
-    public manage(): number {
+    public manage(): Time {
         const threads = Math.floor(
             Math.max(0, this.targetRamGetter() - this.managedRam) /
                 this.ramPerThread,
@@ -201,15 +227,19 @@ class FillerRamTask extends RamTaskManager {
             this.managedScripts.set(ascript.hostname, ascript);
             this.managedRam += ascript.ramUsage;
         });
-        return Date.now() + defaultDelay;
+        return Date.now() + maxPeriodForHackingSchedulingFunctions;
     }
 
-    /**
-     * Kills the filler task on a server
-     * @param server Server to kill task on
-     * @returns Ram Freed
-     */
-    public freeServer(server: Server): number {
+    public checkServer(server: Server): Threads {
+        if (this.managedScripts.has(server.hostname)) {
+            const ascript = this.managedScripts.get(server.hostname)!;
+            return ascript.threads;
+        } else {
+            return 0;
+        }
+    }
+
+    public freeServer(server: Server): Threads {
         if (this.managedScripts.has(server.hostname)) {
             const ascript = this.managedScripts.get(server.hostname)!;
             const success = this.kill(
@@ -265,9 +295,9 @@ class WeakenRamTask extends FillerRamTask {
     constructor(
         protected ns: NS,
         /** Method to fill with */
-        protected fill: (threads: number) => ActiveScript[],
+        protected fill: (threads: Threads) => ActiveScript[],
         /** Method to kill with */
-        protected kill: (pid: number) => void,
+        protected kill: (pid: ProcessID) => void,
         /** Targeted amount of ram to consume */
         protected targetRamGetter: () => number,
     ) {
@@ -277,7 +307,7 @@ class WeakenRamTask extends FillerRamTask {
     /**
      * Weakens may not be canceled outside of a killAll()
      */
-    public freeServer(server: Server): number {
+    public freeServer(server: Server): Threads {
         return 0;
     }
 
@@ -293,19 +323,14 @@ class WeakenRamTask extends FillerRamTask {
     }
 }
 
-type Deadzone = {
-    start: number;
-    end: number;
-};
-
 /** Task that handles creating new hacking batches */
 class HackingRamTask extends RamTaskManager {
     /** Weaken subtask */
     private weakenRamTask?: WeakenRamTask;
     /** Next manage time */
-    private nextManageTime: number = 0;
+    private nextManageTime: Time = 0;
     /** When the next batch should be execed off */
-    private nextBatchInitializationTime: number = 0;
+    private nextBatchInitializationTime: Time = 0;
     /** Queues for each script type */
     private scriptQueues: {
         hack: LinkedList<HackingElement>;
@@ -316,7 +341,7 @@ class HackingRamTask extends RamTaskManager {
         grow: new LinkedList<HackingElement>(),
         weaken: new LinkedList<HackingElement>(),
     };
-    /** Deadzones */
+    /** List of deadzones when the target of this hacker may not be at minimum security */
     private deadZones: LinkedList<Deadzone> = new LinkedList<Deadzone>();
 
     constructor(
@@ -325,13 +350,14 @@ class HackingRamTask extends RamTaskManager {
         protected exec: (
             target: string,
             script: HackScriptType,
-            threads: number,
-            endTime: number,
-        ) => number,
+            threads: Threads,
+            delay: Time,
+            endTime: Time,
+        ) => ProcessID,
         /** Method to fill with */
-        protected fill: (target: string, threads: number) => ActiveScript[],
+        protected fill: (target: string, threads: Threads) => ActiveScript[],
         /** Function to kill with */
-        protected kill: (pid: number) => void,
+        protected kill: (pid: ProcessID) => void,
         /** Function to exec when we needed to cancel a batch */
         protected missRecorder: (reason: string) => void,
         /** Task type metadata */
@@ -340,9 +366,9 @@ class HackingRamTask extends RamTaskManager {
         super();
         this.weakenRamTask = new WeakenRamTask(
             ns,
-            (threads: number) => fill(evaluator.target.hostname, threads),
+            (threads: Threads) => fill(evaluator.target.hostname, threads),
             kill,
-            () => evaluator.ramAllocation,
+            () => evaluator.ramAllocation, //TODO: We need to figure out how to safely recover from a stage loss
         );
     }
 
@@ -350,12 +376,12 @@ class HackingRamTask extends RamTaskManager {
      * Primary management function
      * @returns Time to be yielded to next
      */
-    public manage(): number {
-        const currentTime = Date.now();
-        let policy;
+    public manage(): Time {
+        const currentTime: Time = Date.now();
+        let policy: HackingPolicy | undefined;
         switch (this.evaluator.stage) {
             case -1:
-                return currentTime + defaultDelay;
+                return currentTime + maxPeriodForHackingSchedulingFunctions;
             case 0:
                 policy = this.evaluator.getPolicy()!;
                 if (policy.sequence.length === 0) {
@@ -371,30 +397,17 @@ class HackingRamTask extends RamTaskManager {
                     return this.nextManageTime;
                 }
 
-                const hackTime = this.ns.getHackTime(
-                    this.evaluator.target.hostname,
-                );
-                const scriptTimes = {
-                    hack: hackTime,
-                    grow: 3.2 * hackTime,
-                    weaken: 4 * hackTime,
-                };
-                const endTimes = {
-                    hack: currentTime + scriptTimes.hack,
-                    grow: currentTime + scriptTimes.grow,
-                    weaken: currentTime + scriptTimes.weaken,
-                };
-
                 while ((this.deadZones.peek()?.end ?? Infinity) < currentTime) {
-                    //this.ns.tprint(
-                    //    `Popping deadzone from the queue: ${this.deadZones.peek()!.end} < ${currentTime}`,
-                    //);
                     this.deadZones.pop()!;
                 }
 
+                this.nextManageTime =
+                    this.deadZones.peek()?.end ??
+                    currentTime + maxPeriodForHackingSchedulingFunctions;
+
                 if (
                     this.deadZones.peek()?.start ??
-                    Infinity - deadZoneDelay < currentTime
+                    Infinity - deadZonePadding < currentTime
                 ) {
                     this.nextManageTime = this.deadZones.peek()!.end;
                     return this.nextManageTime;
@@ -408,70 +421,98 @@ class HackingRamTask extends RamTaskManager {
                         this.evaluator.target.hostname,
                     )
                 ) {
-                    //this.ns.tprint(
-                    //    `Wrong deadzones ${currentTime}, ${this.deadZones.peek()?.start}\n ${this.ns.getServerSecurityLevel(
-                    //        this.evaluator.target.hostname,
-                    //    )}`,
-                    //);
-                    //this.delayStreak += 1;
-                    return currentTime + securityFailureWaitTime;
+                    this.ns.tprint(
+                        `Wrong deadzones ${currentTime}, ${this.deadZones.peek()?.start}\n ${this.ns.getServerSecurityLevel(
+                            this.evaluator.target.hostname,
+                        )}`,
+                    );
+                    return currentTime + backupSecurityFailureSchedulingDelay;
                 }
 
-                if (currentTime >= this.nextBatchInitializationTime) {
+                const hackTime = this.ns.getHackTime(
+                    this.evaluator.target.hostname,
+                );
+                const scriptTimes = {
+                    hack: hackTime,
+                    grow: 3.2 * hackTime,
+                    weaken: 4 * hackTime,
+                };
+                const endTimes = {
+                    hack: currentTime + scriptTimes.hack,
+                    grow: currentTime + scriptTimes.grow,
+                    weaken: currentTime + scriptTimes.weaken,
+                };
+                const nextManageEndTimes = {
+                    hack: this.nextManageTime + scriptTimes.hack,
+                    grow: this.nextManageTime + scriptTimes.grow,
+                    weaken: this.nextManageTime + scriptTimes.weaken,
+                };
+
+                if (this.nextManageTime >= this.nextBatchInitializationTime) {
                     policy = policy ?? this.evaluator.getPolicy()!;
-                    this.startBatch(currentTime, scriptTimes, policy.sequence);
+                    this.nextBatchInitializationTime = Math.max(
+                        this.nextBatchInitializationTime,
+                        currentTime,
+                    );
+                    this.startBatch(
+                        this.nextBatchInitializationTime,
+                        scriptTimes,
+                        policy.sequence,
+                    );
                     this.nextBatchInitializationTime =
-                        currentTime + policy.spacing;
+                        this.nextBatchInitializationTime + policy.spacing;
                 }
 
-                const minTimes = hackScriptTypes.map(
-                    (script: HackScriptType) => {
-                        while (
-                            (this.scriptQueues[script].peek()?.endTime ??
-                                Infinity) <= endTimes[script]
+                hackScriptTypes.forEach((script: HackScriptType) => {
+                    while (
+                        /**
+                         * If it should have ended by the time it would end if we started it the next manage time,
+                         * we should trigger it now
+                         */
+                        (this.scriptQueues[script].peek()?.endTime ??
+                            Infinity) <= nextManageEndTimes[script]
+                    ) {
+                        const elem = this.scriptQueues[script].pop()!;
+                        if (
+                            /**
+                             * If the expected end time of the script is after the nessisary end time + the delay
+                             * We kill the batch
+                             */
+                            endTimes[script] >=
+                            elem.endTime + hackScriptMaximumPermissibleDelay
                         ) {
-                            const elem = this.scriptQueues[script].pop()!;
-                            if (
-                                endTimes[script] <=
-                                elem.endTime + batchMaximumDelay
-                            ) {
-                                if (elem.exec(endTimes[script]) === 0) {
-                                    elem.kill();
-                                    this.missRecorder('Exec missed');
-                                } else {
-                                    if (script === 'hack') {
-                                        //this.ns.tprint(
-                                        //    `adding deadzone: ${endTimes[script]}, ${elem.parent.hardEndTime!}`,
-                                        //);
-                                        this.deadZones.push({
-                                            start: Math.floor(endTimes[script]),
-                                            end: Math.ceil(
-                                                elem.parent.hardEndTime!,
-                                            ),
-                                        });
-                                    }
-                                    //this.ns.tprint(
-                                    //    `Starting a ${script} at time ${currentTime}, expected end time: ${endTimes[script]}, intended end time: ${elem.endTime}`,
-                                    //);
-                                }
-                            } else {
-                                elem.kill();
-                                this.missRecorder(
-                                    `Overtime by ${endTimes[script] + batchMaximumDelay - elem.endTime}ms due to a late return of ${currentTime - this.nextManageTime}ms`,
-                                );
+                            elem.kill();
+                            this.missRecorder(
+                                `Overtime by ${endTimes[script] + hackScriptMaximumPermissibleDelay - elem.endTime}ms`,
+                            );
+                        }
+                        /**
+                         * We fire it with first argument being the delay,
+                         * which is calculated as the targeted end time - the time it would end if started now,
+                         * and the second argument being the intended end time
+                         */
+                        if (
+                            elem.exec(
+                                elem.endTime - endTimes[script],
+                                elem.endTime,
+                            ) === 0
+                        ) {
+                            elem.kill();
+                            //this.missRecorder('Exec missed');
+                        } else {
+                            //this.ns.tprint(
+                            //    `Starting ${script} with delay ${elem.endTime - endTimes[script]} for end time ${elem.endTime}`,
+                            //);
+                            if (script === 'hack') {
+                                this.deadZones.push({
+                                    start: Math.floor(elem.endTime), // Earliest it should end
+                                    end: Math.ceil(elem.parent.hardEndTime!), // Latest it should end
+                                });
                             }
                         }
-                        return (
-                            (this.scriptQueues[script].peek()?.endTime ??
-                                Infinity) - scriptTimes[script]
-                        );
-                    },
-                );
+                    }
+                });
 
-                this.nextManageTime = Math.min(
-                    currentTime + defaultDelay,
-                    ...minTimes,
-                );
                 return this.nextManageTime;
         }
     }
@@ -490,27 +531,33 @@ class HackingRamTask extends RamTaskManager {
 
     /**
      * Starts a batch
-     * @param currentTime Date.now()
+     * @param startTime Time to start the batch
      * @param scriptTimes Up to date times for hack grow and weaken
      * @param sequencing Batch sequencing to use
      */
     private startBatch(
-        currentTime: number,
-        scriptTimes: { hack: number; grow: number; weaken: number },
+        startTime: Time,
+        scriptTimes: { hack: Time; grow: Time; weaken: Time },
         sequencing: HackingScript[],
     ) {
         const batch = new HackingBatch(
-            (script: HackScriptType, threads: number, endTime: number) =>
+            (
+                script: HackScriptType,
+                threads: Threads,
+                delay: Time,
+                endTime: Time,
+            ) =>
                 this.exec(
                     this.evaluator.target.hostname,
                     script,
                     threads,
+                    delay,
                     endTime,
                 ),
             this.kill,
         );
         batch
-            .init(currentTime, scriptTimes, sequencing)
+            .init(startTime, scriptTimes, sequencing)
             .forEach(([script, element]) =>
                 this.scriptQueues[script].push(element),
             );
@@ -624,18 +671,33 @@ class RamUsageSubmodule extends BaseModule {
             (item: RamSpace) => item.availableRam,
         );
     /** Heap of all timed scripts by end time to remove them from the priority ram space */
-    private timedScriptHeap: KeyedMinHeap<number, ActiveScript> =
-        new KeyedMinHeap<number, ActiveScript>(
+    private trackedScriptHeap: KeyedMinHeap<ProcessID, ActiveScript> =
+        new KeyedMinHeap<ProcessID, ActiveScript>(
             (item: ActiveScript) => item.pid,
             (item: ActiveScript) => item.endTime,
         );
+
+    constructor(
+        protected ns: NS,
+        protected serverUtilityModule: ServerUtilityModule,
+    ) {
+        super(ns);
+    }
+
+    public registerBackgroundTasks(): BackgroundTask[] {
+        return [];
+    }
+
+    public registerPriorityTasks(): PriorityTask[] {
+        return [];
+    }
 
     /**
      * Updates all the server changes
      */
     update(): void {
         const thisScript = this.ns.getRunningScript()!;
-        serverUtilityModule.ourServers.forEach((server) => {
+        this.serverUtilityModule.ourServers.forEach((server) => {
             if (!this.priorityRamSpaceUsed.getByKey(server.hostname)) {
                 if (server.hostname === thisScript.server) {
                     this.priorityRamSpaceUsed.insert({
@@ -673,7 +735,7 @@ class RamUsageSubmodule extends BaseModule {
      * @param ascript Script to track
      */
     protected pushActiveScipt(ascript: ActiveScript): void {
-        this.timedScriptHeap.insert(ascript);
+        this.trackedScriptHeap.insert(ascript);
         this.priorityRamSpaceUsed.getByKey(ascript.hostname)!.availableRam -=
             ascript.ramUsage;
     }
@@ -691,9 +753,9 @@ class RamUsageSubmodule extends BaseModule {
      * Wrapper for kill that clears the active scripts where relevant
      * @param pid script to kill
      */
-    protected kill(pid: number): void {
+    protected kill(pid: ProcessID): void {
         //this.ns.tprint(`Killing pid: ${pid}`);
-        const ascript = this.timedScriptHeap.removeByKey(pid);
+        const ascript = this.trackedScriptHeap.removeByKey(pid);
         if (ascript) {
             this.clearActiveScript(ascript);
         }
@@ -704,10 +766,11 @@ class RamUsageSubmodule extends BaseModule {
     protected manageActiveScripts() {
         const currentTime = Date.now();
         while (
-            (this.timedScriptHeap.peek()?.endTime ?? Infinity) <= currentTime &&
-            !this.ns.isRunning(this.timedScriptHeap.peek()!.pid)
+            (this.trackedScriptHeap.peek()?.endTime ?? Infinity) <=
+                currentTime &&
+            !this.ns.isRunning(this.trackedScriptHeap.peek()!.pid)
         ) {
-            this.clearActiveScript(this.timedScriptHeap.pop()!);
+            this.clearActiveScript(this.trackedScriptHeap.pop()!);
         }
     }
 
@@ -715,7 +778,7 @@ class RamUsageSubmodule extends BaseModule {
     public integrityCheck(): void {
         const currentTime = Date.now();
         const thisScript = this.ns.getRunningScript()!;
-        const liveScripts = this.timedScriptHeap.toArray();
+        const liveScripts = this.trackedScriptHeap.toArray();
         if (
             !liveScripts.every(
                 (ascript) =>
@@ -787,19 +850,26 @@ class RamUsageSubmodule extends BaseModule {
 
     public log(): Record<string, any> {
         return {
-            trackedOnGoingScripts: this.timedScriptHeap.size,
+            trackedOnGoingScripts: this.trackedScriptHeap.size,
             trackedServerNumber: this.priorityRamSpaceUsed.size,
         };
     }
 }
 
-/** Primary module, handles the scheduling of all ram, mostly focused around hacking */
-class HackingSchedulerModule extends RamUsageSubmodule {
+/**
+ * ### HackingSchedulerModule Uniqueness
+ * This module implements the hacking strategy
+ */
+export class HackingSchedulerModule extends RamUsageSubmodule {
     /** Subtasks that handle their own scheduling */
     taskList: Array<RamTaskManager> = [];
 
-    public init(ns: NS) {
-        super.init(ns);
+    constructor(
+        protected ns: NS,
+        protected serverUtilityModule: ServerUtilityModule,
+        protected hackingUtilityModule: HackingUtilityModule,
+    ) {
+        super(ns, serverUtilityModule);
 
         this.taskList = [
             new HackingRamTask(
@@ -807,10 +877,11 @@ class HackingSchedulerModule extends RamUsageSubmodule {
                 (
                     target: string,
                     script: HackScriptType,
-                    threads: number,
-                    endTime: number,
-                ) => this.fire(target, script, threads, endTime),
-                (target: string, threads: number) =>
+                    threads: Threads,
+                    delay: Time,
+                    endTime: Time,
+                ) => this.fire(target, script, threads, delay, endTime),
+                (target: string, threads: Threads) =>
                     this.fill('weakenLooped', threads, 0, target),
                 this.kill.bind(this),
                 (reason: string) =>
@@ -824,10 +895,11 @@ class HackingSchedulerModule extends RamUsageSubmodule {
                 (
                     target: string,
                     script: HackScriptType,
-                    threads: number,
-                    endTime: number,
-                ) => this.fire(target, script, threads, endTime),
-                (target: string, threads: number) =>
+                    threads: Threads,
+                    delay: Time,
+                    endTime: Time,
+                ) => this.fire(target, script, threads, delay, endTime),
+                (target: string, threads: Threads) =>
                     this.fill('weakenLooped', threads, 1, target),
                 this.kill.bind(this),
                 (reason: string) =>
@@ -837,14 +909,34 @@ class HackingSchedulerModule extends RamUsageSubmodule {
             new FillerRamTask(
                 ns,
                 scriptMapping.share,
-                (threads: number) => this.fill('share', threads, 2),
+                (threads: Threads) => this.fill('share', threads, 2),
                 this.kill.bind(this),
                 () => hackingUtilityModule.shareRam,
             ),
         ];
     }
 
-    @BackgroundTask(60_000)
+    public registerBackgroundTasks(): BackgroundTask[] {
+        return super.registerBackgroundTasks().concat([
+            {
+                name: 'RamUsageSubmodule.update',
+                fn: this.update.bind(this),
+                nextRun: 0,
+                interval: 60_000,
+            },
+        ]);
+    }
+
+    public registerPriorityTasks(): PriorityTask[] {
+        return super.registerPriorityTasks().concat([
+            {
+                name: 'HackingSchedulerModule.manageActiveScripts',
+                fn: this.manageActiveScripts.bind(this),
+                nextRun: 0,
+            },
+        ]);
+    }
+
     public update(): void {
         super.update();
     }
@@ -854,28 +946,32 @@ class HackingSchedulerModule extends RamUsageSubmodule {
      * @param target Target server of the script
      * @param script Script to run
      * @param threads Number of threads to spawn
+     * @param delay Internal to impose on fired script
+     * @param endTime Earliest end time for fired script
      * @param args any additional args
      * @returns pid
      */
     private fire(
         target: string,
         script: HackScriptType,
-        threads: number,
-        endTime: number,
+        threads: Threads,
+        delay: Time,
+        endTime: Time,
         ...args: ScriptArg[]
     ): number {
         const neededRam = this.ns.getScriptRam(scriptMapping[script]) * threads;
         const server = this.requestSingleRam(neededRam);
         if (server) {
             //this.ns.tprint(
-            //    `Starting script ${scriptMapping[script]} on ${server.hostname} @${target} with ${threads} threads. Expected to end in ${endTime - Date.now()}ms. This will take ${neededRam} RAM`,
+            //    `Starting script ${scriptMapping[script]} on ${server.hostname} @${target} with ${threads} threads. With an interal delay of ${delay}, expected to end in ${endTime - Date.now()}ms. This will take ${neededRam} RAM`,
             //);
             const pid = this.ns.exec(
                 scriptMapping[script],
                 server.hostname,
                 threads,
                 target,
-                endTime, //To make the call unique
+                delay,
+                endTime,
                 ...args,
             );
             //this.ns.tprint(`Pid of new script: ${pid}`);
@@ -885,9 +981,7 @@ class HackingSchedulerModule extends RamUsageSubmodule {
                         ${scriptMapping[script]},
                         ${server.hostname},
                         ${threads},
-                        ${target},
-                        ${endTime},
-                        ${args}
+                        ${target}
                     `,
                 );
                 return 0;
@@ -916,7 +1010,7 @@ class HackingSchedulerModule extends RamUsageSubmodule {
      */
     private fill(
         script: ScriptType,
-        neededThreads: number,
+        neededThreads: Threads,
         priority: number,
         ...args: ScriptArg[]
     ): ActiveScript[] {
@@ -924,47 +1018,61 @@ class HackingSchedulerModule extends RamUsageSubmodule {
         const ramPerThread = this.ns.getScriptRam(filename);
         const newPids: Array<ActiveScript> = [];
 
-        for (let hostname of serverUtilityModule.ourHostnames) {
+        for (let hostname of this.serverUtilityModule.ourHostnames) {
             if (neededThreads === 0) {
                 break;
             }
-            const server = serverUtilityModule.ourServers.get(hostname)!;
+            const server = this.serverUtilityModule.ourServers.get(hostname)!;
 
             for (let i = priority + 1; i < this.taskList.length; i++) {
                 this.taskList[i].freeServer(server);
             }
 
-            neededThreads += this.taskList[priority].freeServer(server);
+            if (
+                server.maxRam - this.ns.getServerUsedRam(hostname) >
+                ramPerThread
+            ) {
+                neededThreads += this.taskList[priority].freeServer(server);
 
-            const threads = Math.min(
-                Math.floor(
-                    (server.maxRam - this.ns.getServerUsedRam(hostname)) /
-                        ramPerThread,
-                ),
-                neededThreads,
-            );
+                const threads = Math.min(
+                    Math.floor(
+                        (server.maxRam - this.ns.getServerUsedRam(hostname)) /
+                            ramPerThread,
+                    ),
+                    neededThreads,
+                );
 
-            if (threads !== 0) {
-                //this.ns.tprint(`${filename}, ${hostname}, ${threads}, ${args}`);
-                const pid = this.ns.exec(filename, hostname, threads, ...args);
-                if (pid === 0) {
-                    this.ns.tprint(
-                        `Fill failed: ${
-                            filename
-                        }, ${hostname}, ${threads}, ${args}
-                    `,
+                if (threads !== 0) {
+                    //this.ns.tprint(`${filename}, ${hostname}, ${threads}, ${args}`);
+                    const pid = this.ns.exec(
+                        filename,
+                        hostname,
+                        threads,
+                        ...args,
                     );
-                }
-                newPids.push({
-                    hostname: hostname,
-                    threads: threads,
-                    ramUsage: threads * ramPerThread,
-                    endTime: Infinity,
-                    pid: pid,
-                });
-            }
+                    if (pid === 0) {
+                        this.ns.tprint(
+                            `Fill failed: ${
+                                filename
+                            }, ${hostname}, ${threads}, ${args}
+                    `,
+                        );
+                    }
+                    const ascript = {
+                        hostname: hostname,
+                        threads: threads,
+                        ramUsage: threads * ramPerThread,
+                        endTime: Infinity,
+                        pid: pid,
+                    };
+                    newPids.push(ascript);
 
-            neededThreads -= threads;
+                    // We need to push this as an active script as we cannot cancel it if this is a hacking script
+                    if (priority < 2) this.pushActiveScipt(ascript);
+                }
+
+                neededThreads -= threads;
+            }
         }
         return newPids;
     }
@@ -980,7 +1088,9 @@ class HackingSchedulerModule extends RamUsageSubmodule {
     ): Server | null {
         const result = this.priorityRamSpaceUsed.findNext(neededRam);
         if (result) {
-            const server = serverUtilityModule.ourServers.get(result.hostname)!;
+            const server = this.serverUtilityModule.ourServers.get(
+                result.hostname,
+            )!;
             for (let i = 2; i < this.taskList.length; i++) {
                 this.taskList[i].freeServer(server);
             }
@@ -991,8 +1101,7 @@ class HackingSchedulerModule extends RamUsageSubmodule {
     }
 
     /** Primary loop, triggers everything */
-    @PriorityTask
-    manageActiveScripts(): number {
+    manageActiveScripts(): Time {
         super.manageActiveScripts();
         return Math.min(...this.taskList.map((task) => task.manage()));
     }
@@ -1013,10 +1122,3 @@ class HackingSchedulerModule extends RamUsageSubmodule {
         };
     }
 }
-
-/**
- * ### HackingSchedulerModule Uniqueness
- * This module implements the hacking strategy
- */
-export const hackingSchedulerModule = new HackingSchedulerModule();
-state.push(hackingSchedulerModule);

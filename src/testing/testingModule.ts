@@ -1,23 +1,42 @@
 import { NS } from '@ns';
-import {
-    TrackProperty,
-    BackgroundTask,
-    PriorityTask,
-} from '/lib/schedulingDecorators';
 import { BaseModule } from '/lib/baseModule';
-import { state } from '/lib/state';
+import { BackgroundTask, PriorityTask } from '/lib/scheduler';
 
+/** ### TestingModule Uniqueness */
 export class TestingModule extends BaseModule {
-    @TrackProperty
     randomIncrement: number = 0;
-    @TrackProperty
     sharedCounter: number = 0;
-    @TrackProperty
     lastPriorityRun: number = 0;
-    @TrackProperty
     nextPriorityRun: number = 0;
 
-    @PriorityTask
+    public registerBackgroundTasks(): BackgroundTask[] {
+        return [
+            {
+                name: 'TestingModule.testRandomIncrement',
+                fn: this.testRandomIncrement.bind(this),
+                nextRun: 0,
+                interval: 1_000,
+            },
+            {
+                name: 'TestingModule.resetCounter',
+                fn: this.resetCounter.bind(this),
+                nextRun: 0,
+                interval: 5_000,
+            },
+        ];
+    }
+
+    public registerPriorityTasks(): PriorityTask[] {
+        return [
+            {
+                name: 'TestingModule.priorityTask',
+                fn: this.priorityTask.bind(this),
+                nextRun: 0,
+            },
+        ];
+    }
+
+    //@PriorityTask
     priorityTask() {
         const now = Date.now();
         if (this.lastPriorityRun !== 0) {
@@ -31,7 +50,7 @@ export class TestingModule extends BaseModule {
         return this.nextPriorityRun;
     }
 
-    @BackgroundTask(1000)
+    //@BackgroundTask(1000)
     testRandomIncrement() {
         this.randomIncrement += Math.random() * 2;
         this.sharedCounter += Math.floor(this.randomIncrement);
@@ -40,7 +59,7 @@ export class TestingModule extends BaseModule {
         );
     }
 
-    @BackgroundTask(5000)
+    //@BackgroundTask(5000)
     resetCounter() {
         if (this.sharedCounter > 1000 || this.sharedCounter < -1000) {
             this.sharedCounter = 0;
@@ -49,15 +68,40 @@ export class TestingModule extends BaseModule {
     }
 }
 
+/** ### TestingModuleTwo Uniqueness */
 export class TestingModuleTwo extends BaseModule {
-    @TrackProperty
     sharedCounter: number = 0;
-    @TrackProperty
     lastPriorityRun: number = 0;
-    @TrackProperty
     nextPriorityRun: number = 0;
 
-    @PriorityTask
+    public registerBackgroundTasks(): BackgroundTask[] {
+        return [
+            {
+                name: 'TestingModuleTwo.backgroundCounter',
+                fn: this.backgroundCounter.bind(this),
+                nextRun: 0,
+                interval: 2_000,
+            },
+            {
+                name: 'TestingModuleTwo.backgroundDivider',
+                fn: this.backgroundDivider.bind(this),
+                nextRun: 0,
+                interval: 3_000,
+            },
+        ];
+    }
+
+    public registerPriorityTasks(): PriorityTask[] {
+        return [
+            {
+                name: 'TestingModuleTwo.priorityRandomYield',
+                fn: this.priorityRandomYield.bind(this),
+                nextRun: 0,
+            },
+        ];
+    }
+
+    //@PriorityTask
     priorityRandomYield() {
         const now = Date.now();
         if (this.lastPriorityRun !== 0) {
@@ -71,22 +115,15 @@ export class TestingModuleTwo extends BaseModule {
         return this.nextPriorityRun;
     }
 
-    @BackgroundTask(2000)
+    //@BackgroundTask(2000)
     backgroundCounter() {
         this.sharedCounter *= 2;
         this.ns.tprint(`Counter doubled to: ${this.sharedCounter}`);
     }
 
-    @BackgroundTask(3000)
+    //@BackgroundTask(3000)
     backgroundDivider() {
         this.sharedCounter = Math.floor(this.sharedCounter / 3);
         this.ns.tprint(`Counter divided by 3 to: ${this.sharedCounter}`);
     }
 }
-
-/** ### TestingModule Uniqueness */
-export const testingModule = new TestingModule();
-state.push(testingModule);
-/** ### TestingModuleTwo Uniqueness */
-export const testingModuleTwo = new TestingModuleTwo();
-state.push(testingModule);

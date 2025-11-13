@@ -1,26 +1,48 @@
 import { NS } from '@ns';
-import {
-    TrackProperty,
-    BackgroundTask,
-    PriorityTask,
-} from '/lib/schedulingDecorators';
 import { BaseModule } from '/lib/baseModule';
-import { state } from '/lib/state';
-import { serverUtilityModule } from '/hacking/serverUtilityModule';
+import { ServerUtilityModule } from '/hacking/serverUtilityModule';
+import { BackgroundTask, PriorityTask } from '/lib/scheduler';
 
+/** ### MoneyModule Uniqueness
+ * Handles all purchasing decisions
+ */
 export class MoneyModule extends BaseModule {
-    @BackgroundTask(60_000)
+    constructor(
+        protected ns: NS,
+        protected serverUtilityModule: ServerUtilityModule,
+    ) {
+        super(ns);
+    }
+
+    public registerBackgroundTasks(): BackgroundTask[] {
+        return [
+            {
+                name: 'MoneyModule.purchaseServers',
+                fn: this.purchaseServers.bind(this),
+                nextRun: 0,
+                interval: 60_000,
+            },
+        ];
+    }
+
+    public registerPriorityTasks(): PriorityTask[] {
+        return [];
+    }
+
     //Scuffed for now because w/e
     purchaseServers() {
-        let [ramGained, cost] = serverUtilityModule.cheapestPurchasableServer();
+        return;
+        let [ramGained, cost] =
+            this.serverUtilityModule.cheapestPurchasableServer();
         while (this.ns.getPlayer().money > cost) {
-            if (!serverUtilityModule.purchaseServer()) {
+            if (!this.serverUtilityModule.purchaseServer()) {
                 this.ns.tprint(
                     `Some dumb bug in MoneyModule player=${this.ns.getPlayer().money}, ${cost}, ${ramGained}`,
                 );
                 break;
             }
-            [ramGained, cost] = serverUtilityModule.cheapestPurchasableServer();
+            [ramGained, cost] =
+                this.serverUtilityModule.cheapestPurchasableServer();
         }
     }
     //@BackgroundTask(60_000)
@@ -29,9 +51,3 @@ export class MoneyModule extends BaseModule {
         return;
     }
 }
-
-/** ### MoneyModule Uniqueness
- * Handles all purchasing decisions
- */
-export const moneyModule = new MoneyModule();
-state.push(moneyModule);

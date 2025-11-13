@@ -1,7 +1,6 @@
 import { NS } from '@ns';
-import { BackgroundTask, PriorityTask } from '/lib/schedulingDecorators';
 import { BaseModule } from '/lib/baseModule';
-import { state } from '/lib/state';
+import { getState } from '/lib/state';
 
 /**
  * Notes:
@@ -36,4 +35,4 @@ export class GangUtilityModule extends BaseModule {}
  * This modules handles ????
  */
 export const gangUtilityModule = new GangUtilityModule();
-state.push(gangUtilityModule);
+getState.push(gangUtilityModule);
