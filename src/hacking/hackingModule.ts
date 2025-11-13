@@ -396,7 +396,8 @@ class HackingRamTask extends RamTaskManager {
                     this.deadZones.peek()?.start ??
                     Infinity - deadZoneDelay < currentTime
                 ) {
-                    return this.deadZones.peek()!.end;
+                    this.nextManageTime = this.deadZones.peek()!.end;
+                    return this.nextManageTime;
                 }
 
                 if (
@@ -407,13 +408,13 @@ class HackingRamTask extends RamTaskManager {
                         this.evaluator.target.hostname,
                     )
                 ) {
-                    throw new Error(
-                        `Wrong deadzones ${currentTime}, ${this.deadZones.peek()?.start}\n ${this.ns.getServerSecurityLevel(
-                            this.evaluator.target.hostname,
-                        )}`,
-                    );
+                    //this.ns.tprint(
+                    //    `Wrong deadzones ${currentTime}, ${this.deadZones.peek()?.start}\n ${this.ns.getServerSecurityLevel(
+                    //        this.evaluator.target.hostname,
+                    //    )}`,
+                    //);
                     //this.delayStreak += 1;
-                    //return currentTime + securityFailureWaitTime;
+                    return currentTime + securityFailureWaitTime;
                 }
 
                 if (currentTime >= this.nextBatchInitializationTime) {

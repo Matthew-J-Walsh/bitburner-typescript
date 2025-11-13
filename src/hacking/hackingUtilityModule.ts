@@ -484,6 +484,7 @@ export abstract class HackingEvaluator {
 
 class MoneyEvaluator extends HackingEvaluator {
     public getPolicy(): HackingPolicy | undefined {
+        if (!this._target) return;
         switch (this.stage) {
             case -1:
                 return;
@@ -547,6 +548,7 @@ class MoneyEvaluator extends HackingEvaluator {
 
 class ExpEvaluator extends HackingEvaluator {
     public getPolicy(): HackingPolicy | undefined {
+        if (!this._target) return;
         switch (this.stage) {
             case -1:
                 return;
@@ -666,7 +668,7 @@ export class HackingUtilityModule extends BaseModule {
         this.expEvaluation!.update();
     }
 
-    @BackgroundTask(300_000)
+    @BackgroundTask(600_000)
     /** Updates the ram proportioning breakdown */
     decideRamProportioning() {
         if (this.shareRam === 0 && false) {
