@@ -407,15 +407,45 @@ export class HackingUtilityFunctions {
             sequence: getSeq(ns, target, batches, ramAllocation),
         };
     }
+
+    public static hackPolicyMoneyEval(ns: NS, policy: HackingPolicy): number {
+        return (
+            (policy.target.moneyMax! *
+                ns.hackAnalyze(policy.target.hostname) *
+                policy.sequence[0]!.threads) /
+            policy.spacing
+        );
+    }
+
+    public static hackPolicyExpEval(ns: NS, policy: HackingPolicy): number {
+        return (
+            (HackingUtilityFunctions.hackExp(
+                ns,
+                policy.target,
+                ns.getPlayer(),
+            ) *
+                policy.sequence.reduce(
+                    (threads, hscript) => threads + hscript.threads,
+                    0,
+                )) /
+            policy.spacing
+        );
+    }
 }
 
 export abstract class HackingEvaluator {
     /** NS */
     protected ns?: NS;
     /** Income formula for this evaluator */
-    private incomeFormula: (server: Server) => number = (server: Server) => 0;
+    private incomeFormula: (server: Server, ramAllocation: number) => number = (
+        server: Server,
+        ramAllocation: number,
+    ) => 0;
     /** Cost formula for this evaluator */
-    private costFormula: (server: Server) => number = (server: Server) => 0;
+    private costFormula: (server: Server, ramAllocation: number) => number = (
+        server: Server,
+        ramAllocation: number,
+    ) => 0;
     /** Estimated incomes of the different server options */
     private incomeEstimates: Array<number> = [];
     /** Estimated change costs of the different server options */
@@ -431,17 +461,19 @@ export abstract class HackingEvaluator {
 
     public init(
         ns: NS,
-        incomeFormula: (server: Server) => number,
-        costFormula: (server: Server) => number,
+        incomeFormula: (server: Server, ramAllocation: number) => number,
+        costFormula: (server: Server, ramAllocation: number) => number,
     ) {
         this.ns = ns;
         this.incomeFormula = incomeFormula;
         this.costFormula = costFormula;
     }
 
-    protected iterateOverServers<T>(fn: (server: Server) => T): Array<T> {
+    protected iterateOverServers<T>(
+        fn: (server: Server, ramAllocation: number) => T,
+    ): Array<T> {
         return serverUtilityModule.targetableServers.map((server) =>
-            fn(server),
+            fn(server, this.ramAllocation),
         );
     }
 
@@ -593,7 +625,7 @@ export class HackingUtilityModule extends BaseModule {
 
         this.moneyEvaluation.init(
             this.ns,
-            (server: Server) => {
+            (server: Server, ramAllocation: number) => {
                 const fakeServer = { ...server };
                 fakeServer.hackDifficulty = fakeServer.minDifficulty;
                 if (
@@ -601,36 +633,22 @@ export class HackingUtilityModule extends BaseModule {
                     fakeServer.hackDifficulty === server.hackDifficulty
                 )
                     throw new Error('Copy error');
-                const player = ns.getPlayer();
-                const hackPercent = HackingUtilityFunctions.hackPercent(
+                return HackingUtilityFunctions.hackPolicyMoneyEval(
                     this.ns,
-                    fakeServer,
-                    player,
-                );
-                const growPercent = HackingUtilityFunctions.growPercent(
-                    this.ns,
-                    fakeServer,
-                    1,
-                    player,
-                );
-                return (
-                    (((HackingUtilityFunctions.hackChance(
+                    HackingUtilityFunctions.generateHackScriptPolicy(
                         this.ns,
-                        fakeServer,
-                        player,
-                    ) *
-                        hackPercent *
-                        Math.log(growPercent)) /
-                        Math.log(growPercent / (1 - hackPercent))) *
-                        fakeServer.moneyMax!) /
-                    HackingUtilityFunctions.hackTime(fakeServer, player)
+                        server,
+                        ramAllocation,
+                        hwgwStructure,
+                        HackingUtilityFunctions.getSequenceHWGW,
+                    ),
                 );
             },
-            (server: Server) => 0,
+            (server: Server, ramAllocation: number) => 0,
         );
         this.expEvaluation.init(
             this.ns,
-            (server: Server) => {
+            (server: Server, ramAllocation: number) => {
                 const fakeServer = { ...server };
                 fakeServer.hackDifficulty = fakeServer.minDifficulty;
                 if (
@@ -638,16 +656,18 @@ export class HackingUtilityModule extends BaseModule {
                     fakeServer.hackDifficulty === server.hackDifficulty
                 )
                     throw new Error('Copy error');
-                const player = ns.getPlayer();
-                return (
-                    HackingUtilityFunctions.hackExp(
+                return HackingUtilityFunctions.hackPolicyMoneyEval(
+                    this.ns,
+                    HackingUtilityFunctions.generateHackScriptPolicy(
                         this.ns,
-                        fakeServer,
-                        player,
-                    ) / HackingUtilityFunctions.hackTime(fakeServer, player)
+                        server,
+                        ramAllocation,
+                        hwStructure,
+                        HackingUtilityFunctions.getSequenceHW,
+                    ),
                 );
             },
-            (server: Server) => 0,
+            (server: Server, ramAllocation: number) => 0,
         );
     }
 
