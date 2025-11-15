@@ -7,17 +7,11 @@ export type Threads = number;
 export const purchasedServerPrefix = 'pserv';
 
 /** Minimal time allowed between experience batches targeting the same target per pair TODO */
-export const minimalTimeBetweenTwoScriptsEnding = 500;
+export const minimalTimeBetweenTwoScriptsEnding = 2000;
 /** Default delay for hacking priority returns */
-export const maximalPeriodForHackingSchedulingFunctions = 5_000;
-/** Built in delay between batch starts */
-export const batchInternalDelay = 200;
-/** Maximum permissible time that a script can end without killing the batch */
-export const hackScriptMaximumPermissibleDelay = batchInternalDelay / 2;
+export const maxPeriodForHackingSchedulingFunctions = 5_000;
 /** Time to wait if we aren't at minimum security */
 export const backupSecurityFailureSchedulingDelay = 5;
-/** Delay before a deadzone that we won't start a script */
-export const deadZonePadding = batchInternalDelay;
 
 /** General script type */
 export type ScriptType =

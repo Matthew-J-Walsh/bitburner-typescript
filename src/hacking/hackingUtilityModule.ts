@@ -229,7 +229,7 @@ export class HackingUtilityFunctions {
             weakenTime /
                 ((structure.length - 1) * minimalTimeBetweenTwoScriptsEnding),
         );
-        //maxBatches = Math.min(maxBatches, structure.length === 2 ? 51 : 21);
+        maxBatches = Math.min(maxBatches, structure.length === 2 ? 40 : 20);
         while (
             maxBatches > 0 &&
             ((maxBatches % 4 === 0 && 'grow' in structure) ||
@@ -237,6 +237,8 @@ export class HackingUtilityFunctions {
         ) {
             maxBatches--;
         }
+
+        if (maxBatches === 0) return 1;
 
         return maxBatches;
     }
@@ -254,7 +256,7 @@ export class HackingUtilityFunctions {
         batches: number,
         ramAllocation: number,
     ): HackingScript[] {
-        if (ramAllocation === 0) return [];
+        if (ramAllocation === 0 || batches === 0) return [];
 
         const ramPerBatch = ramAllocation / batches;
         const player = ns.getPlayer();
@@ -318,22 +320,23 @@ export class HackingUtilityFunctions {
         batches: number,
         ramAllocation: number,
     ): HackingScript[] {
-        if (ramAllocation === 0) return [];
+        if (ramAllocation === 0 || batches === 0) return [];
         const ramPerBatch = ramAllocation / batches;
 
         let hackCount = Math.floor(ramPerBatch / hackAvgCost);
         if (hackCount === 0) return [];
         let weakenCount = Math.ceil((hackCount * hackFort) / weakenFort);
         if (!(Number.isInteger(hackCount) && Number.isInteger(weakenCount)))
-            throw new Error('WTF');
+            throw new Error(`WTF ${hackCount}, ${weakenCount}`);
         let seq: HackingScript[] = [
             { script: 'hack', threads: hackCount },
             { script: 'weaken', threads: weakenCount },
         ];
         if (HackingUtilityFunctions.sequenceRam(seq) > ramPerBatch * 1.1) {
-            throw new Error(
-                `WTF2 ${ramPerBatch} ${hackAvgCost}, ${hackCount} ${weakenCount}, ${HackingUtilityFunctions.sequenceRam(seq)}`,
-            );
+            //throw new Error(
+            //    `WTF2 ${ramPerBatch} ${hackAvgCost}, ${hackCount} ${weakenCount}, ${HackingUtilityFunctions.sequenceRam(seq)}`,
+            //);
+            return [];
         }
         if (hackCount === 0 || weakenCount === 0) {
             throw new Error(
@@ -358,14 +361,14 @@ export class HackingUtilityFunctions {
         batches: number,
         ramAllocation: number,
     ): HackingScript[] {
-        if (ramAllocation === 0) return [];
+        if (ramAllocation === 0 || batches === 0) return [];
         const ramPerBatch = ramAllocation / batches;
 
         let growCount = Math.floor(ramPerBatch / growAvgCost);
         if (growCount === 0) return [];
         let weakenCount = Math.ceil((growCount * growFort) / weakenFort);
         if (!(Number.isInteger(growCount) && Number.isInteger(weakenCount)))
-            throw new Error('WTF');
+            throw new Error(`WTF ${growCount}, ${weakenCount}`);
         let seq: HackingScript[] = [
             { script: 'grow', threads: growCount },
             { script: 'weaken', threads: weakenCount },
@@ -504,6 +507,7 @@ export abstract class HackingEvaluator {
     public abstract getPolicy(): HackingPolicy | undefined;
 
     public log(): Record<string, any> {
+        if (!this._target) return {};
         const topTwo = this.incomeEstimates.reduce(
             (topTwo, val, idx) =>
                 val > topTwo.best.value
@@ -701,7 +705,7 @@ export class HackingUtilityModule extends BaseModule {
                 name: 'HackingUtilityModule.decideRamProportioning',
                 fn: this.decideRamProportioning.bind(this),
                 nextRun: 0,
-                interval: 60_000,
+                interval: 150_000,
             },
         ];
     }
@@ -721,7 +725,7 @@ export class HackingUtilityModule extends BaseModule {
 
     /** Updates the ram proportioning breakdown */
     decideRamProportioning() {
-        if (this.shareRam === 0 && false) {
+        if (this.shareRam === 0 && true) {
             this.moneyEvaluation!.ramAllocation =
                 this.serverUtilityModule.totalServerRam * 0;
             this.expEvaluation!.ramAllocation =
@@ -729,9 +733,9 @@ export class HackingUtilityModule extends BaseModule {
             this.shareRam = this.serverUtilityModule.totalServerRam; // * .2
         } else {
             this.moneyEvaluation.ramAllocation =
-                this.serverUtilityModule.totalServerRam * 0.6;
+                this.serverUtilityModule.totalServerRam * 0.8;
             this.expEvaluation.ramAllocation =
-                this.serverUtilityModule.totalServerRam * 0.2;
+                this.serverUtilityModule.totalServerRam * 0;
             this.shareRam = this.serverUtilityModule.totalServerRam; // * .2
         }
     }

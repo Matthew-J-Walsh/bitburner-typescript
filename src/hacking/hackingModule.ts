@@ -14,9 +14,7 @@ import {
     Time,
     ProcessID,
     Threads,
-    maximalPeriodForHackingSchedulingFunctions as maxPeriodForHackingSchedulingFunctions,
-    batchInternalDelay,
-    hackScriptMaximumPermissibleDelay,
+    maxPeriodForHackingSchedulingFunctions,
     backupSecurityFailureSchedulingDelay,
     HackScriptType,
     HackScriptRuntimes,
@@ -25,7 +23,6 @@ import {
     HackingScript,
     scriptMapping,
     LoopedScriptType,
-    deadZonePadding,
 } from '/hacking/constants';
 import { approximatelyEqual } from '/lib/misc';
 import { ServerUtilityModule } from './serverUtilityModule';
@@ -63,6 +60,8 @@ type HackingElement = {
     kill: () => void;
     /** Parent of the element, used for debugging... and to make sure it doesn't get GCed */
     parent: HackingBatch;
+    /** If this script is first */
+    first: boolean;
 };
 
 /** A batch of hack scripts */
@@ -71,6 +70,8 @@ class HackingBatch {
     private controledScripts: Array<ProcessID> = [];
     /** If the batch has been killed */
     public killed: boolean = false;
+    /** Hard start time */
+    public hardStartTime?: Time;
     /** End time hard */
     public hardEndTime?: Time;
 
@@ -90,12 +91,11 @@ class HackingBatch {
         startTime: Time,
         times: HackScriptRuntimes,
         sequencing: HackingScript[],
+        batchInternalDelay: Time,
     ): Array<[HackScriptType, HackingElement]> {
+        this.hardStartTime = startTime - batchInternalDelay;
         const endTime = Math.ceil(startTime + times.weaken - 1);
-        this.hardEndTime =
-            endTime +
-            sequencing.length * batchInternalDelay + //TODO: This really should be 1 less than this
-            hackScriptMaximumPermissibleDelay;
+        this.hardEndTime = endTime + sequencing.length * batchInternalDelay;
 
         return sequencing.map((hscript, idx) => [
             hscript.script,
@@ -105,6 +105,7 @@ class HackingBatch {
                     this.start(hscript.script, hscript.threads, delay, endTime),
                 kill: () => this.killAll(),
                 parent: this,
+                first: idx === 0,
             },
         ]);
     }
@@ -122,29 +123,29 @@ class HackingBatch {
         delay: Time,
         endTime: Time,
     ): ProcessID {
-        if (!this.killed) {
-            const pid = this.exec(script, threads, delay, endTime);
-            if (pid !== 0) {
-                this.controledScripts.push(pid);
-            } else {
-                this.killAll();
-            }
-            return pid;
+        if (this.killed) return -1;
+        const pid = this.exec(script, threads, delay, endTime);
+        if (pid !== 0) {
+            this.controledScripts.push(pid);
+        } else {
+            this.killAll();
         }
-        return 0;
+        return pid;
     }
 
     /** Cancels the run by killing all scripts */
     public killAll() {
-        this.controledScripts.forEach((pid) => this.kill(pid));
+        if (Date.now() < this.hardStartTime!) {
+            this.controledScripts.forEach((pid) => this.kill(pid));
+        }
         this.killed = true;
     }
 
     /** Verifies assumptions about this are true */
     public integrityCheck(): void {
-        if (this.killed && this.controledScripts.length > 0) {
-            throw new Error('Hacking Batch Integrity Failure - False Killed');
-        }
+        //if (this.killed && this.controledScripts.length > 0) {
+        //    throw new Error('Hacking Batch Integrity Failure - False Killed');
+        //}
     }
 }
 
@@ -368,7 +369,11 @@ class HackingRamTask extends RamTaskManager {
             ns,
             (threads: Threads) => fill(evaluator.target.hostname, threads),
             kill,
-            () => evaluator.ramAllocation, //TODO: We need to figure out how to safely recover from a stage loss
+            () =>
+                Math.min(
+                    evaluator.ramAllocation,
+                    this.ns.getScriptRam(scriptMapping['weakenLooped']) * 2000,
+                ), //TODO: We need to figure out how to safely recover from a stage loss
         );
     }
 
@@ -384,6 +389,10 @@ class HackingRamTask extends RamTaskManager {
                 return currentTime + maxPeriodForHackingSchedulingFunctions;
             case 0:
                 policy = this.evaluator.getPolicy()!;
+                if (!policy) {
+                    this.ns.tprint(`WTF no policy?`);
+                    return currentTime + maxPeriodForHackingSchedulingFunctions;
+                }
                 if (policy.sequence.length === 0) {
                     // We are still weakening
                     this.reset();
@@ -401,17 +410,27 @@ class HackingRamTask extends RamTaskManager {
                     this.deadZones.pop()!;
                 }
 
-                this.nextManageTime =
-                    this.deadZones.peek()?.end ??
-                    currentTime + maxPeriodForHackingSchedulingFunctions;
+                policy = policy ?? this.evaluator.getPolicy()!;
+
+                this.nextManageTime = Math.floor(currentTime + policy.spacing);
 
                 if (
-                    this.deadZones.peek()?.start ??
-                    Infinity - deadZonePadding < currentTime
+                    this.nextManageTime >
+                    (this.deadZones.peek()?.start ?? Infinity)
                 ) {
                     this.nextManageTime = this.deadZones.peek()!.end;
-                    return this.nextManageTime;
                 }
+
+                //if (
+                //    this.deadZones.peek()?.start ??
+                //    Infinity - 100 < currentTime // TODO: kinda have to guess for the moment?
+                //) {
+                //    this.ns.tprint(
+                //        `Delayed??? ${currentTime}, ${this.nextManageTime}, ${this.deadZones.peek()!.start} -> ${this.deadZones.peek()!.end}`,
+                //    );
+                //    this.nextManageTime = this.deadZones.peek()!.end;
+                //    return this.nextManageTime;
+                //}
 
                 if (
                     this.ns.getServerSecurityLevel(
@@ -429,14 +448,21 @@ class HackingRamTask extends RamTaskManager {
                     return currentTime + backupSecurityFailureSchedulingDelay;
                 }
 
-                const hackTime = this.ns.getHackTime(
-                    this.evaluator.target.hostname,
-                );
                 const scriptTimes = {
-                    hack: hackTime,
-                    grow: 3.2 * hackTime,
-                    weaken: 4 * hackTime,
+                    hack: Math.ceil(
+                        this.ns.getHackTime(this.evaluator.target.hostname),
+                    ),
+                    grow: Math.ceil(
+                        this.ns.getGrowTime(this.evaluator.target.hostname),
+                    ),
+                    weaken: Math.ceil(
+                        this.ns.getWeakenTime(this.evaluator.target.hostname),
+                    ),
                 };
+                /** This internal delay is due to level gain issues */
+                const batchInternalDelay = Math.ceil(
+                    Math.max(scriptTimes.weaken * 0.005, 200),
+                );
                 const endTimes = {
                     hack: currentTime + scriptTimes.hack,
                     grow: currentTime + scriptTimes.grow,
@@ -448,8 +474,19 @@ class HackingRamTask extends RamTaskManager {
                     weaken: this.nextManageTime + scriptTimes.weaken,
                 };
 
-                if (this.nextManageTime >= this.nextBatchInitializationTime) {
-                    policy = policy ?? this.evaluator.getPolicy()!;
+                if (policy.spacing < 1)
+                    throw new Error('Impending infinite loop');
+
+                let i = 0;
+                while (
+                    this.nextManageTime >= this.nextBatchInitializationTime
+                ) {
+                    if (!Number.isFinite(policy.spacing)) {
+                        this.ns.tprint(
+                            `infinite spacing ??? ${JSON.stringify(policy)}`,
+                        );
+                        break;
+                    }
                     this.nextBatchInitializationTime = Math.max(
                         this.nextBatchInitializationTime,
                         currentTime,
@@ -458,12 +495,30 @@ class HackingRamTask extends RamTaskManager {
                         this.nextBatchInitializationTime,
                         scriptTimes,
                         policy.sequence,
+                        batchInternalDelay,
                     );
-                    this.nextBatchInitializationTime =
-                        this.nextBatchInitializationTime + policy.spacing;
+                    this.nextBatchInitializationTime = Math.ceil(
+                        this.nextBatchInitializationTime + policy.spacing,
+                    );
+                    i += 1;
+                    if (i > 10) {
+                        this.ns.tprint(
+                            `STOPPING INFINITE LOOP ${policy.spacing}`,
+                        );
+                        break;
+                    }
                 }
 
+                this.ns.tprint(
+                    `${currentTime} => ${this.nextManageTime}... ${this.nextBatchInitializationTime}`, //\n${JSON.stringify(policy)}
+                );
+
                 hackScriptTypes.forEach((script: HackScriptType) => {
+                    if (this.scriptQueues[script].peek()) {
+                        this.ns.tprint(
+                            `Next ${script} @ ${this.scriptQueues[script].peek()?.endTime}... ${nextManageEndTimes[script]}`,
+                        );
+                    }
                     while (
                         /**
                          * If it should have ended by the time it would end if we started it the next manage time,
@@ -478,36 +533,35 @@ class HackingRamTask extends RamTaskManager {
                              * If the expected end time of the script is after the nessisary end time + the delay
                              * We kill the batch
                              */
-                            endTimes[script] >=
-                            elem.endTime + hackScriptMaximumPermissibleDelay
+                            endTimes[script] + batchInternalDelay / 2 >=
+                            elem.endTime
                         ) {
                             elem.kill();
                             this.missRecorder(
-                                `Overtime by ${endTimes[script] + hackScriptMaximumPermissibleDelay - elem.endTime}ms`,
+                                `Overtime by ${endTimes[script] + batchInternalDelay / 2 - elem.endTime}ms`,
                             );
-                        }
-                        /**
-                         * We fire it with first argument being the delay,
-                         * which is calculated as the targeted end time - the time it would end if started now,
-                         * and the second argument being the intended end time
-                         */
-                        if (
-                            elem.exec(
+                            continue;
+                        } else if (elem.endTime - endTimes[script] <= 0) {
+                            throw new Error('BRUZZAH');
+                        } else {
+                            /**
+                             * We fire it with first argument being the delay,
+                             * which is calculated as the targeted end time - the time it would end if started now,
+                             * and the second argument being the intended end time
+                             */
+                            const pid = elem.exec(
                                 elem.endTime - endTimes[script],
                                 elem.endTime,
-                            ) === 0
-                        ) {
-                            elem.kill();
-                            //this.missRecorder('Exec missed');
-                        } else {
-                            //this.ns.tprint(
-                            //    `Starting ${script} with delay ${elem.endTime - endTimes[script]} for end time ${elem.endTime}`,
-                            //);
-                            if (script === 'hack') {
-                                this.deadZones.push({
-                                    start: Math.floor(elem.endTime), // Earliest it should end
-                                    end: Math.ceil(elem.parent.hardEndTime!), // Latest it should end
-                                });
+                            );
+                            if (pid <= 0) {
+                                elem.kill();
+                                this.missRecorder(
+                                    `${currentTime} Exec missed ${pid}`,
+                                );
+                            } else {
+                                this.ns.tprint(
+                                    `${currentTime} Starting ${script} with delay ${elem.endTime - endTimes[script]} for end time ${elem.endTime}`,
+                                );
                             }
                         }
                     }
@@ -539,6 +593,7 @@ class HackingRamTask extends RamTaskManager {
         startTime: Time,
         scriptTimes: { hack: Time; grow: Time; weaken: Time },
         sequencing: HackingScript[],
+        batchInternalDelay: Time,
     ) {
         const batch = new HackingBatch(
             (
@@ -556,11 +611,37 @@ class HackingRamTask extends RamTaskManager {
                 ),
             this.kill,
         );
-        batch
-            .init(startTime, scriptTimes, sequencing)
-            .forEach(([script, element]) =>
-                this.scriptQueues[script].push(element),
+        const elements = batch.init(
+            startTime,
+            scriptTimes,
+            sequencing,
+            batchInternalDelay,
+        );
+        elements.forEach(([script, element]) => {
+            this.ns.tprint(`$${script}: ${JSON.stringify(element)}`);
+            this.scriptQueues[script].push(element);
+        });
+        if (elements.length !== 0) {
+            this.deadZones.push({
+                start: Math.floor(
+                    startTime + scriptTimes.weaken - 1 - batchInternalDelay,
+                ), // Earliest it should end
+                end: Math.ceil(
+                    startTime +
+                        scriptTimes.weaken +
+                        elements.length * batchInternalDelay,
+                ), // Latest it should end
+            });
+            this.ns.tprint(
+                `Pushed deadzone ${Math.floor(
+                    startTime + scriptTimes.weaken - 1 - batchInternalDelay,
+                )} -> ${Math.ceil(
+                    startTime +
+                        scriptTimes.weaken +
+                        elements.length * batchInternalDelay,
+                )}`,
             );
+        }
     }
 
     public integrityCheck(): void {

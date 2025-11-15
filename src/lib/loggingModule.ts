@@ -29,7 +29,7 @@ export class LoggingModule extends BaseModule {
             {
                 name: 'LoggingModule.logToFile',
                 fn: this.logToFile.bind(this),
-                nextRun: 0,
+                nextRun: Date.now() + 5_000,
                 interval: 10_000,
             },
         ];

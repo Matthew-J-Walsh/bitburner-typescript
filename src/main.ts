@@ -15,7 +15,7 @@ export async function main(ns: NS) {
 
     const loggingModule = new LoggingModule(ns);
     const serverUtilityModule = new ServerUtilityModule(ns);
-    const hackingUtilityModule = new HackingUtilityModule(
+    const hackingUtilityModule = new HackingUtilityModule( // This can probably be contained within the scheduler
         ns,
         serverUtilityModule,
     );
@@ -26,6 +26,7 @@ export async function main(ns: NS) {
     );
     const moneyModule = new MoneyModule(ns, serverUtilityModule);
     const allModules: BaseModule[] = [
+        // make me a Record<string, BaseModule>
         loggingModule,
         serverUtilityModule,
         hackingUtilityModule,

@@ -103,7 +103,8 @@ export class ServerUtilityModule extends BaseModule {
             if (
                 server.hackDifficulty != null &&
                 server.hackDifficulty! > 0 &&
-                server.purchasedByPlayer != true
+                server.purchasedByPlayer != true &&
+                server.hostname != 'darkweb'
             ) {
                 if (server.hasAdminRights) {
                     this.targetableServers.push(server);
