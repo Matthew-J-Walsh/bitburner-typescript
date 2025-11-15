@@ -68,6 +68,7 @@ export class Scheduler {
 
             this.priorityQueue.pop();
             task.nextRun = task.fn();
+            if (task.nextRun < now) throw new Error(`Fuckass ${task.name}`);
             this.priorityQueue.push(task);
         }
 
@@ -81,6 +82,7 @@ export class Scheduler {
             this.backgroundQueue.pop();
             task.interval = task.fn() ?? task.interval;
             task.nextRun = now + task.interval;
+            if (task.nextRun < now) throw new Error(`Fuckass ${task.name}`);
             this.backgroundQueue.push(task);
         }
 

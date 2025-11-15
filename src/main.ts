@@ -5,16 +5,17 @@ import { BaseModule } from '/lib/baseModule';
 // Loaded modules:
 //import { TestingModule, TestingModuleTwo } from '/testing/testingModule';
 import { LoggingModule } from '/lib/loggingModule';
-import { ServerUtilityModule } from './hacking/serverUtilityModule';
-import { HackingUtilityModule } from './hacking/hackingUtilityModule';
-import { HackingSchedulerModule } from './hacking/hackingModule';
+//import { ServerUtilityModule } from './hacking/serverUtilityModule';
+//import { HackingUtilityModule } from './hacking/hackingUtilityModule';
+//import { HackingSchedulerModule } from './hacking/hackingModule';
 import { MoneyModule } from './core/money/moneyModule';
+import { GangModule } from './gang/gangModule';
 
 export async function main(ns: NS) {
     ns.disableLog('ALL');
 
     const loggingModule = new LoggingModule(ns);
-    const serverUtilityModule = new ServerUtilityModule(ns);
+    /**const serverUtilityModule = new ServerUtilityModule(ns);
     const hackingUtilityModule = new HackingUtilityModule( // This can probably be contained within the scheduler
         ns,
         serverUtilityModule,
@@ -23,14 +24,17 @@ export async function main(ns: NS) {
         ns,
         serverUtilityModule,
         hackingUtilityModule,
-    );
-    const moneyModule = new MoneyModule(ns, serverUtilityModule);
+    );*/
+    const gangModule = new GangModule(ns);
+
+    const moneyModule = new MoneyModule(ns, undefined, gangModule); //serverUtilityModule
     const allModules: BaseModule[] = [
         // make me a Record<string, BaseModule>
         loggingModule,
-        serverUtilityModule,
-        hackingUtilityModule,
-        hackingSchedulerModule,
+        //serverUtilityModule,
+        //hackingUtilityModule,
+        //hackingSchedulerModule,
+        gangModule,
         moneyModule,
     ];
     loggingModule.init(allModules);
