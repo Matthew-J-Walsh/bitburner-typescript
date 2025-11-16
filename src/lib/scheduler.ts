@@ -67,9 +67,15 @@ export class Scheduler {
             if (!task || task.nextRun > now) break;
 
             this.priorityQueue.pop();
-            task.nextRun = task.fn();
-            if (task.nextRun < now) throw new Error(`Fuckass ${task.name}`);
-            this.priorityQueue.push(task);
+            try {
+                task.nextRun = task.fn();
+                if (task.nextRun < now) throw new Error(`Fuckass ${task.name}`);
+                this.priorityQueue.push(task);
+            } catch (error) {
+                this.ns.alert(
+                    `Fatal error while running ${task.name}, jettisoning!\n${error}`,
+                );
+            }
         }
 
         const nextPriority = this.nextPriorityTime();
@@ -80,9 +86,15 @@ export class Scheduler {
             if (!task || task.nextRun > now) break;
 
             this.backgroundQueue.pop();
-            task.nextRun = task.fn() ?? now + task.interval;
-            if (task.nextRun < now) throw new Error(`Fuckass ${task.name}`);
-            this.backgroundQueue.push(task);
+            try {
+                task.nextRun = task.fn() ?? now + task.interval;
+                if (task.nextRun < now) throw new Error(`Fuckass ${task.name}`);
+                this.backgroundQueue.push(task);
+            } catch (error) {
+                this.ns.alert(
+                    `Fatal error while running ${task.name}, jettisoning!\n${error}`,
+                );
+            }
         }
 
         return this.getNextSleepTime();
