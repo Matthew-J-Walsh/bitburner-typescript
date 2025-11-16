@@ -36,6 +36,7 @@ export class GangUtilityFunctions {
      * @returns
      */
     public static evaluateTask(
+        ns: NS,
         gangMember: GangMemberInfo,
         taskStats: GangTaskStats,
         gangInfo: GangGenInfo,
@@ -53,26 +54,27 @@ export class GangUtilityFunctions {
         },
     ): number {
         const expGains = GangUtilityFunctions.calculateExpGain(
+            ns,
             gangMember,
             taskStats,
         );
         const taskValues = {
             ...{
                 power: GangUtilityFunctions.getPowerGain(gangMember, taskStats),
-                respect: GangUtilityFunctions.calculateRespectGain(
+                respect: ns.formulas.gang.respectGain(
+                    gangInfo,
                     gangMember,
                     taskStats,
-                    gangInfo,
                 ),
-                wanted: GangUtilityFunctions.calculateWantedGain(
+                wanted: ns.formulas.gang.wantedLevelGain(
+                    gangInfo,
                     gangMember,
                     taskStats,
-                    gangInfo,
                 ),
-                money: GangUtilityFunctions.calculateMoneyGain(
+                money: ns.formulas.gang.moneyGain(
+                    gangInfo,
                     gangMember,
                     taskStats,
-                    gangInfo,
                 ),
             },
             ...expGains,
@@ -101,6 +103,7 @@ export class GangUtilityFunctions {
      * @returns
      */
     public static getStage0Weights(
+        ns: NS,
         powerRemaining: number,
         gangMember: GangMemberInfo,
         gangInfo: GangGenInfo,
@@ -124,7 +127,7 @@ export class GangUtilityFunctions {
                 gangMember,
                 gangInfo,
             ),
-            ...GangUtilityFunctions.getExpWeights(gangMember, gangInfo),
+            ...GangUtilityFunctions.getExpWeights(ns, gangMember, gangInfo),
             ...{
                 respect: GangUtilityFunctions.getRespectWeight(
                     gangInfo,
@@ -148,6 +151,7 @@ export class GangUtilityFunctions {
      * @returns
      */
     public static getStage1Weights(
+        ns: NS,
         respectRemaining: number,
         moneyRemaining: number,
         gangMember: GangMemberInfo,
@@ -171,7 +175,7 @@ export class GangUtilityFunctions {
         const moneyBonus = respectRemaining > 0 ? 0 : 1.0 / moneyRemaining;
         return {
             power: 0,
-            ...GangUtilityFunctions.getExpWeights(gangMember, gangInfo),
+            ...GangUtilityFunctions.getExpWeights(ns, gangMember, gangInfo),
             ...{
                 respect:
                     respectBonus +
@@ -217,6 +221,7 @@ export class GangUtilityFunctions {
      * @returns
      */
     public static getExpWeights(
+        ns: NS,
         gangMember: GangMemberInfo,
         gangInfo: GangGenInfo,
     ): {
@@ -229,8 +234,10 @@ export class GangUtilityFunctions {
     } {
         const skillDeltas =
             GangUtilityFunctions.calculateSkillDeltas(gangMember);
-        const ascDeltas =
-            GangUtilityFunctions.calculateAscensionDeltas(gangMember);
+        const ascDeltas = GangUtilityFunctions.calculateAscensionDeltas(
+            ns,
+            gangMember,
+        );
         return {
             hack_exp: 0, //skillDeltas.hack + ascDeltas.hack,
             str_exp: skillDeltas.str + ascDeltas.str,
@@ -276,128 +283,13 @@ export class GangUtilityFunctions {
     }
 
     /**
-     * Calculates the respect gain. replace with ns.formulas.gang.
-     * @param gangMember
-     * @param taskStats
-     * @param gangInfo
-     * @returns
-     */
-    public static calculateRespectGain(
-        gangMember: GangMemberInfo,
-        taskStats: GangTaskStats,
-        gangInfo: GangGenInfo,
-    ): number {
-        if (taskStats.baseRespect === 0) return 0;
-        let statWeight =
-            (taskStats.hackWeight / 100) * gangMember.hack +
-            (taskStats.strWeight / 100) * gangMember.str +
-            (taskStats.defWeight / 100) * gangMember.def +
-            (taskStats.dexWeight / 100) * gangMember.dex +
-            (taskStats.agiWeight / 100) * gangMember.agi +
-            (taskStats.chaWeight / 100) * gangMember.cha;
-        statWeight -= 4 * taskStats.difficulty;
-        if (statWeight <= 0) return 0;
-        const territoryMult = Math.max(
-            0.005,
-            Math.pow(gangInfo.territory * 100, taskStats.territory.respect) /
-                100,
-        );
-        const territoryPenalty = (0.2 * gangInfo.territory + 0.8) * 1;
-        if (isNaN(territoryMult) || territoryMult <= 0) return 0;
-        const respectMult = gangInfo.wantedPenalty;
-        return Math.pow(
-            11 *
-                taskStats.baseRespect *
-                statWeight *
-                territoryMult *
-                respectMult,
-            territoryPenalty,
-        );
-    }
-
-    /**
-     * Calcultes the wanted gain. resplace with ns.formulas.gang
-     * @param gangMember
-     * @param taskStats
-     * @param gangInfo
-     * @returns
-     */
-    public static calculateWantedGain(
-        gangMember: GangMemberInfo,
-        taskStats: GangTaskStats,
-        gangInfo: GangGenInfo,
-    ): number {
-        if (taskStats.baseWanted === 0) return 0;
-        let statWeight =
-            (taskStats.hackWeight / 100) * gangMember.hack +
-            (taskStats.strWeight / 100) * gangMember.str +
-            (taskStats.defWeight / 100) * gangMember.def +
-            (taskStats.dexWeight / 100) * gangMember.dex +
-            (taskStats.agiWeight / 100) * gangMember.agi +
-            (taskStats.chaWeight / 100) * gangMember.cha;
-        statWeight -= 3.5 * taskStats.difficulty;
-        if (statWeight <= 0) return 0;
-        const territoryMult = Math.max(
-            0.005,
-            Math.pow(gangInfo.territory * 100, taskStats.territory.wanted) /
-                100,
-        );
-        if (isNaN(territoryMult) || territoryMult <= 0) return 0;
-        if (taskStats.baseWanted < 0) {
-            return 0.4 * taskStats.baseWanted * statWeight * territoryMult;
-        }
-        const calc =
-            (7 * taskStats.baseWanted) /
-            Math.pow(3 * statWeight * territoryMult, 0.8);
-
-        // Put an arbitrary cap on this to prevent wanted level from rising too fast if the
-        // denominator is very small. Might want to rethink formula later
-        return Math.min(100, calc);
-    }
-
-    /**
-     * Calcultes the money gain. resplace with ns.formulas.gang
-     * @param gangMember
-     * @param taskStats
-     * @param gangInfo
-     * @returns
-     */
-    public static calculateMoneyGain(
-        gangMember: GangMemberInfo,
-        taskStats: GangTaskStats,
-        gangInfo: GangGenInfo,
-    ): number {
-        if (taskStats.baseMoney === 0) return 0;
-        let statWeight =
-            (taskStats.hackWeight / 100) * gangMember.hack +
-            (taskStats.strWeight / 100) * gangMember.str +
-            (taskStats.defWeight / 100) * gangMember.def +
-            (taskStats.dexWeight / 100) * gangMember.dex +
-            (taskStats.agiWeight / 100) * gangMember.agi +
-            (taskStats.chaWeight / 100) * gangMember.cha;
-
-        statWeight -= 3.2 * taskStats.difficulty;
-        if (statWeight <= 0) return 0;
-        const territoryMult = Math.max(
-            0.005,
-            Math.pow(gangInfo.territory * 100, taskStats.territory.money) / 100,
-        );
-        if (isNaN(territoryMult) || territoryMult <= 0) return 0;
-        const respectMult = gangInfo.wantedPenalty;
-        const territoryPenalty = (0.2 * gangInfo.territory + 0.8) * 1;
-        return Math.pow(
-            5 * taskStats.baseMoney * statWeight * territoryMult * respectMult,
-            territoryPenalty,
-        );
-    }
-
-    /**
      * Calculates the exp gain shamelessly
      * @param gangMember
      * @param taskStats
      * @returns
      */
     public static calculateExpGain(
+        ns: NS,
         gangMember: GangMemberInfo,
         taskStats: GangTaskStats,
     ): {
@@ -434,6 +326,7 @@ export class GangUtilityFunctions {
             difficultyPerCycles *
             expMult.hack *
             GangUtilityFunctions.calculateAscensionMult(
+                ns,
                 gangMember.hack_asc_points,
             );
 
@@ -442,6 +335,7 @@ export class GangUtilityFunctions {
             difficultyPerCycles *
             expMult.str *
             GangUtilityFunctions.calculateAscensionMult(
+                ns,
                 gangMember.str_asc_points,
             );
 
@@ -450,6 +344,7 @@ export class GangUtilityFunctions {
             difficultyPerCycles *
             expMult.def *
             GangUtilityFunctions.calculateAscensionMult(
+                ns,
                 gangMember.def_asc_points,
             );
 
@@ -458,6 +353,7 @@ export class GangUtilityFunctions {
             difficultyPerCycles *
             expMult.dex *
             GangUtilityFunctions.calculateAscensionMult(
+                ns,
                 gangMember.dex_asc_points,
             );
 
@@ -466,6 +362,7 @@ export class GangUtilityFunctions {
             difficultyPerCycles *
             expMult.agi *
             GangUtilityFunctions.calculateAscensionMult(
+                ns,
                 gangMember.agi_asc_points,
             );
 
@@ -474,6 +371,7 @@ export class GangUtilityFunctions {
             difficultyPerCycles *
             expMult.cha *
             GangUtilityFunctions.calculateAscensionMult(
+                ns,
                 gangMember.cha_asc_points,
             );
 
@@ -582,7 +480,10 @@ export class GangUtilityFunctions {
      * @param gangMember
      * @returns
      */
-    public static calculateAscensionDeltas(gangMember: GangMemberInfo): {
+    public static calculateAscensionDeltas(
+        ns: NS,
+        gangMember: GangMemberInfo,
+    ): {
         hack: number;
         str: number;
         def: number;
@@ -593,49 +494,61 @@ export class GangUtilityFunctions {
         return {
             hack:
                 GangUtilityFunctions.calculateAscensionMult(
+                    ns,
                     gangMember.hack_exp + gangMember.hack_asc_points + 1,
                 ) /
                     GangUtilityFunctions.calculateAscensionMult(
+                        ns,
                         gangMember.hack_exp + gangMember.hack_asc_points,
                     ) -
                 1,
             str:
                 GangUtilityFunctions.calculateAscensionMult(
+                    ns,
                     gangMember.str_exp + gangMember.str_asc_points + 1,
                 ) /
                     GangUtilityFunctions.calculateAscensionMult(
+                        ns,
                         gangMember.str_exp + gangMember.str_asc_points,
                     ) -
                 1,
             def:
                 GangUtilityFunctions.calculateAscensionMult(
+                    ns,
                     gangMember.def_exp + gangMember.def_asc_points + 1,
                 ) /
                     GangUtilityFunctions.calculateAscensionMult(
+                        ns,
                         gangMember.def_exp + gangMember.def_asc_points,
                     ) -
                 1,
             dex:
                 GangUtilityFunctions.calculateAscensionMult(
+                    ns,
                     gangMember.dex_exp + gangMember.dex_asc_points + 1,
                 ) /
                     GangUtilityFunctions.calculateAscensionMult(
+                        ns,
                         gangMember.dex_exp + gangMember.dex_asc_points,
                     ) -
                 1,
             agi:
                 GangUtilityFunctions.calculateAscensionMult(
+                    ns,
                     gangMember.agi_exp + gangMember.agi_asc_points + 1,
                 ) /
                     GangUtilityFunctions.calculateAscensionMult(
+                        ns,
                         gangMember.agi_exp + gangMember.agi_asc_points,
                     ) -
                 1,
             cha:
                 GangUtilityFunctions.calculateAscensionMult(
+                    ns,
                     gangMember.cha_exp + gangMember.cha_asc_points + 1,
                 ) /
                     GangUtilityFunctions.calculateAscensionMult(
+                        ns,
                         gangMember.cha_exp + gangMember.cha_asc_points,
                     ) -
                 1,
@@ -659,21 +572,25 @@ export class GangUtilityFunctions {
     ): number {
         const multi = //only care about combat stats
             (GangUtilityFunctions.calculateAscensionMult(
+                ns,
                 gangMember.str_exp + gangMember.str_asc_points - 1_000,
             ) /
                 gangMember.str_asc_mult -
                 1 +
                 (GangUtilityFunctions.calculateAscensionMult(
+                    ns,
                     gangMember.def_exp + gangMember.def_mult - 1_000,
                 ) /
                     gangMember.def_asc_mult -
                     1) +
                 (GangUtilityFunctions.calculateAscensionMult(
+                    ns,
                     gangMember.dex_exp + gangMember.dex_mult - 1_000,
                 ) /
                     gangMember.dex_asc_mult -
                     1) +
                 (GangUtilityFunctions.calculateAscensionMult(
+                    ns,
                     gangMember.agi_exp + gangMember.agi_mult - 1_000,
                 ) /
                     gangMember.agi_asc_mult -
@@ -726,13 +643,14 @@ export class GangUtilityFunctions {
     }
 
     /**
-     * Calculates the power of the ascension multi. replace with ns.formulas.gang
+     * Wrapper for the ascension multiplier formula, returns 1 below 0 points.
+     * @param ns
      * @param points
      * @returns
      */
-    public static calculateAscensionMult(points: number): number {
-        if (points < 0) return -1;
-        return Math.max(Math.pow(points / 2000, 0.5), 1);
+    public static calculateAscensionMult(ns: NS, points: number): number {
+        if (points < 0) return 1;
+        return ns.formulas.gang.ascensionMultiplier(points);
     }
 
     /**

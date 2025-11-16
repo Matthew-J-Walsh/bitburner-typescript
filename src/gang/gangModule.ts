@@ -100,6 +100,7 @@ export class GangModule extends BaseModule {
                     GangUtilityFunctions.getPowerTarget(this.ns) -
                     gangInfo.power;
                 weights = GangUtilityFunctions.getStage0Weights(
+                    this.ns,
                     powerRemaining,
                     gangMember,
                     gangInfo,
@@ -108,6 +109,7 @@ export class GangModule extends BaseModule {
                 );
             } else {
                 weights = GangUtilityFunctions.getStage1Weights(
+                    this.ns,
                     this.respectRemaining,
                     this.moneyRemaining,
                     gangMember,
@@ -122,6 +124,7 @@ export class GangModule extends BaseModule {
                     return [
                         taskname,
                         GangUtilityFunctions.evaluateTask(
+                            this.ns,
                             gangMember,
                             taskStats,
                             gangInfo,
