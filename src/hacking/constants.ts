@@ -1,3 +1,5 @@
+import { Server } from '@ns';
+
 //TODO:
 export type Time = number;
 export type ProcessID = number;
@@ -37,6 +39,14 @@ export const hackScriptTypes = ['hack', 'grow', 'weaken'] as HackScriptType[];
 export type LoopedScriptType = 'weakenLooped' | 'share' | 'stanek';
 export type HackScriptRuntimes = { hack: Time; grow: Time; weaken: Time };
 
+export type HackingPolicy = {
+    /** Home for do nothing */
+    target: Server;
+    spacing: number;
+    /** Empty for weaken */
+    sequence: HackingScript[];
+};
+
 /** Structure of a grow batch */
 export const gwStructure: HackScriptType[] = ['grow', 'weaken'];
 /** Structure of a money batch */
@@ -70,3 +80,9 @@ export const scriptCosts = {
     grow: 1.75,
     weaken: 1.75,
 };
+export const scriptAvgCosts = {
+    hack: (1.7 * 1.0) / 4.0,
+    grow: (1.75 * 3.2) / 4.0,
+    weaken: 1.75,
+};
+export const minimumAllowableBatchRam = growScriptSize + weakenScriptSize;

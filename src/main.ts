@@ -7,7 +7,7 @@ import { BaseModule } from '/lib/baseModule';
 import { LoggingModule } from '/lib/loggingModule';
 import { ServerUtilityModule } from './hacking/serverUtilityModule';
 import { HackingUtilityModule } from './hacking/hackingUtilityModule';
-import { HackingSchedulerModule } from './hacking/hackingModule';
+import { HackingSchedulerModule } from './hacking/hackingSchedulerModule';
 import { MoneyModule } from './core/money/moneyModule';
 import { GangModule } from './gang/gangModule';
 
