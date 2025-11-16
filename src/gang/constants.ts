@@ -1,5 +1,8 @@
 /** Target power */
-export const targetGangWinPower = 1e3 / 12;
+export const targetGangWinPower = 1e3;
+
+/** A bonus to new recruitment to promote recruitment */
+export const newRecruitMulitplier = 2;
 
 export const gangMemberStatList = ['hack', 'str', 'def', 'dex', 'agi', 'cha'];
 export const gangMemberExpList = [

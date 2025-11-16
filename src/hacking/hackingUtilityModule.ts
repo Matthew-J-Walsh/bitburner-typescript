@@ -725,7 +725,8 @@ export class HackingUtilityModule extends BaseModule {
 
     /** Updates the ram proportioning breakdown */
     decideRamProportioning() {
-        if (this.shareRam === 0 && true) {
+        if (true) {
+            //this.shareRam === 0 &&
             this.moneyEvaluation!.ramAllocation =
                 this.serverUtilityModule.totalServerRam * 0;
             this.expEvaluation!.ramAllocation =

@@ -59,7 +59,7 @@ export class Scheduler {
      * Runs an appropriate number of background tasks
      * @returns Requested sleep time
      */
-    async fire() {
+    fire() {
         const now = Date.now();
 
         while (true) {
@@ -80,8 +80,7 @@ export class Scheduler {
             if (!task || task.nextRun > now) break;
 
             this.backgroundQueue.pop();
-            task.interval = task.fn() ?? task.interval;
-            task.nextRun = now + task.interval;
+            task.nextRun = task.fn() ?? now + task.interval;
             if (task.nextRun < now) throw new Error(`Fuckass ${task.name}`);
             this.backgroundQueue.push(task);
         }
@@ -98,6 +97,6 @@ export class Scheduler {
     /** Requested sleep time */
     getNextSleepTime(): number {
         const next = this.nextPriorityTime();
-        return Math.max(1, next - Date.now());
+        return Math.min(Math.max(1, next - Date.now()), 10_000);
     }
 }

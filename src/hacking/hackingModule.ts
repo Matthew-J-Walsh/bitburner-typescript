@@ -525,7 +525,8 @@ class HackingRamTask extends RamTaskManager {
                          * we should trigger it now
                          */
                         (this.scriptQueues[script].peek()?.endTime ??
-                            Infinity) <= nextManageEndTimes[script]
+                            Infinity) <=
+                        nextManageEndTimes[script] + 100
                     ) {
                         const elem = this.scriptQueues[script].pop()!;
                         if (

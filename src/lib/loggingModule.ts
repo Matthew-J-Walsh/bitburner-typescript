@@ -29,7 +29,7 @@ export class LoggingModule extends BaseModule {
             {
                 name: 'LoggingModule.logToFile',
                 fn: this.logToFile.bind(this),
-                nextRun: Date.now() + 5_000,
+                nextRun: 0,
                 interval: 10_000,
             },
         ];
@@ -56,5 +56,9 @@ export class LoggingModule extends BaseModule {
         );
 
         this.ns.write(filename, JSON.stringify(snapshot) + '\n', 'a');
+    }
+
+    public log(): Record<string, any> {
+        return { timestamp: Date.now() };
     }
 }

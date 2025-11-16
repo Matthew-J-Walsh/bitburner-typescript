@@ -6,19 +6,26 @@ import { randomString } from './constants';
 
 /**
  * ### GangModule Uniqueness
- * This modules handles managment of the gang
+ * This modules handles the full managment of the gang
  */
 export class GangModule extends BaseModule {
+    /** What stage the gang is in, territory === 1 */
     stage: number = 0;
+    /** Log storage */
     logInfo: Record<string, any> = {};
-    resEstimate: number = 0; //because we don't have singularity yet
+    /** Estimated amount of respect gained, needed because no singularity to check repuation */
+    resEstimate: number = 0;
+    /** Memory for the respect to calculate gain via difference */
     resMem: number = 0;
 
     constructor(protected ns: NS) {
         super(ns);
         if (!this.ns.gang.inGang()) this.ns.gang.createGang('Slum Snakes');
-        if (this.ns.gang.inGang())
+        if (this.ns.gang.inGang()) {
             this.resMem = this.ns.gang.getGangInformation().respect;
+            if (this.ns.gang.getGangInformation().territory === 1)
+                this.stage = 1;
+        }
     }
 
     public registerBackgroundTasks(): BackgroundTask[] {
@@ -42,6 +49,7 @@ export class GangModule extends BaseModule {
         ];
     }
 
+    /** Primary management function, updates the gang members tasks */
     private manage(): number {
         if (!this.ns.gang.inGang()) {
             if (!this.ns.gang.createGang('Slum Snakes')) {
@@ -58,6 +66,8 @@ export class GangModule extends BaseModule {
         this.resEstimate += gangInfo.respect - this.resMem;
         this.resMem = gangInfo.respect;
 
+        if (gangInfo.territory === 1) this.stage = 1;
+
         const otherGangInfo = this.ns.gang.getOtherGangInformation();
         this.logInfo['otherGangInfo'] = otherGangInfo;
 
@@ -65,7 +75,12 @@ export class GangModule extends BaseModule {
             .getMemberNames()
             .map((name) => this.ns.gang.getMemberInformation(name));
 
-        const bestUpgradeValue = this.bestUpgrade.value;
+        const bestUpgrade = this.bestUpgrade;
+        const bestUpgradeValue =
+            bestUpgrade.cost < this.ns.getPlayer().money
+                ? bestUpgrade.value
+                : 0;
+        this.logInfo['bestUpgrade'] = bestUpgrade;
         this.logInfo['members'] = {};
         gangMembers.forEach((gangMember: GangMemberInfo) => {
             let weights: {
@@ -132,7 +147,7 @@ export class GangModule extends BaseModule {
                 bestTask: bestTask,
             };
         });
-        //this.ns.tprint(`Took ${Date.now() - startTime}ms to process gang`);
+        this.ns.tprint(`Took ${Date.now() - startTime}ms to process gang`);
         //this.ns.tprint(
         //    `${JSON.stringify(GangUtilityFunctions.calculateAscensionDeltas(gangMembers[0]))}`,
         //);
@@ -143,50 +158,57 @@ export class GangModule extends BaseModule {
         //    0.3 / (gangInfo.respectForNextRecruit - gangInfo.respect),
         //);
         //this.ns.tprint(-1 / (gangInfo.respect + gangInfo.wantedLevel + 100));
-        this.ns.tprint(
+        /** this.ns.tprint(
             GangUtilityFunctions.getPowerGain(
                 gangMembers[0],
                 this.ns.gang.getTaskStats('Territory Warfare'),
             ),
-        );
+        );*/
         if (
             Math.max(
                 ...Object.values(otherGangInfo).map((info) => info.power),
-            ) < gangInfo.power
+            ) <= gangInfo.power
         ) {
-            this.ns.tprint('We are dominating! Turning on territory warfare');
+            if (!gangInfo.territoryWarfareEngaged)
+                this.ns.tprint(
+                    'We are dominating! Turning on territory warfare',
+                );
             this.ns.gang.setTerritoryWarfare(true);
         }
-
-        if (gangInfo.territory === 0) this.stage = 1;
 
         return Date.now() + (this.ns.gang.getBonusTime() > 0 ? 4_000 : 10_000); //I dont fucking know dude
     }
 
-    //prio task
+    /** A prioirty task until we have full territory */
     manageStage0(): number {
-        if (this.stage === 1) return Date.now() + 1000_000;
+        if (this.stage === 1) return Date.now() + 100_000;
         return this.manage();
     }
 
-    //background task
+    /** A background task after speed matters less */
     manageStage1(): number {
-        if (this.stage === 0) return Date.now() + 1000_000;
+        if (this.stage === 0) return Date.now() + 100_000;
         return this.manage();
     }
 
+    /**
+     * Helper to set the task with Ascensions
+     * @param member
+     * @param task
+     */
     private setTask(member: string, task: string) {
-        this.ns.tprint(`Assigning ${member} to ${task}`);
+        //this.ns.tprint(`Assigning ${member} to ${task}`);
         if (task == 'Ascend') {
             this.ns.gang.ascendMember(member);
-            this.resMem = this.ns.gang.getGangInformation().respect; // We lost respect
+            this.resMem = this.ns.gang.getGangInformation().respect; // We lost respect, update memory
             this.ns.gang.setMemberTask(member, 'Train Combat');
         } else {
             this.ns.gang.setMemberTask(member, task);
         }
     }
 
-    get bestUpgrade(): {
+    /** The best upgrade avaiable to our gang */
+    private get bestUpgrade(): {
         member: string;
         name: string;
         value: number;
@@ -221,6 +243,22 @@ export class GangModule extends BaseModule {
         );
     }
 
+    /**
+     * Best upgrade externally, the value is only 1/2th of what is claimed.
+     * TODO: Money integration
+     */
+    get bestUpgradeExternal(): {
+        member: string;
+        name: string;
+        value: number;
+        cost: number;
+    } {
+        let bestUpgrade = this.bestUpgrade;
+        bestUpgrade.value /= 12;
+        return bestUpgrade;
+    }
+
+    /** Temporary before core: how much respect to obtain */
     private get respectRemaining(): number {
         const target = 5e5; //2.5e6 is red pill
         const favor = 0;
@@ -228,8 +266,9 @@ export class GangModule extends BaseModule {
         return target * (100 / (100 + favor)) * 1.1 * 75 - this.resEstimate;
     }
 
+    /** Temporary before core: how much money to obtain */
     private get moneyRemaining(): number {
-        return 1e10;
+        return this.ns.getPlayer().money * 2 + 1e10;
     }
 
     public log(): Record<string, any> {
@@ -238,6 +277,8 @@ export class GangModule extends BaseModule {
             ...{
                 stage: this.stage,
                 resEstimate: this.resEstimate,
+                respectRemaining: this.respectRemaining,
+                moneyRemaining: this.moneyRemaining,
             },
         };
     }

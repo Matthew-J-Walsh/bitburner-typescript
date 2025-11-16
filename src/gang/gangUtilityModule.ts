@@ -1,14 +1,26 @@
-import {
-    Gang,
-    GangGenInfo,
-    GangMemberInfo,
-    GangOtherInfoObject,
-    GangTaskStats,
-    NS,
-    Task,
-} from '@ns';
-import { BaseModule } from '/lib/baseModule';
-import { gangMemberStatList, targetGangWinPower } from './constants';
+import { GangGenInfo, GangMemberInfo, GangTaskStats, NS } from '@ns';
+import { targetGangWinPower, newRecruitMulitplier } from './constants';
+
+/**
+ * Conceptually all of these work off the principal of instantaneous multipliers.
+ * You have a multiplier m and a cost c, while you expect to need E seconds to complete the task.
+ * Your goal is to figure out if the multiplier m at time cost c is worth it,
+ * or which is the most worth it.
+ * We can solve this by calculating the delta time
+ *      E' = E - E/m - c
+ *      E' = E(1 - 1/m) - c
+ * We then infintesmlize:
+ *      E' = E(1 - 1/m^(1/c)) - 1
+ * Normalize:
+ *      Weight = 1 - 1/m^(1/c)
+ * And compute the exponential:
+ *      Weight = 1 - e^(-ln(m)/c)
+ * We can then assume that e^x = x + 1 for x close to 0:
+ *      Weight = ln(m)/c
+ * For all long decisions we must keep it like that, for decisions with small m we assume
+ * that ln(m) = m - 1:
+ *      Weight = (m - 1)/c
+ */
 
 /**
  * ### GangUtilityFunctions Uniqueness
@@ -79,6 +91,15 @@ export class GangUtilityFunctions {
         );
     }
 
+    /**
+     * Calculates the weight during stage 0
+     * @param powerRemaining
+     * @param gangMember
+     * @param gangInfo
+     * @param bestUpgradeValue
+     * @param gangCount
+     * @returns
+     */
     public static getStage0Weights(
         powerRemaining: number,
         gangMember: GangMemberInfo,
@@ -97,30 +118,35 @@ export class GangUtilityFunctions {
         wanted: number;
         money: number;
     } {
-        const rwmRatio =
-            GangUtilityFunctions.getEstimatedBuildUpPortion(gangInfo);
         return {
-            power:
-                (1.0 / rwmRatio) *
-                GangUtilityFunctions.getPowerWeight(
-                    powerRemaining,
-                    gangMember,
-                    gangInfo,
-                ),
+            power: GangUtilityFunctions.getPowerWeight(
+                powerRemaining,
+                gangMember,
+                gangInfo,
+            ),
             ...GangUtilityFunctions.getExpWeights(gangMember, gangInfo),
             ...{
-                respect:
-                    (1.0 / rwmRatio) *
-                    GangUtilityFunctions.getRepWeight(gangInfo, gangCount),
-                wanted:
-                    (1.0 / rwmRatio) *
-                    GangUtilityFunctions.getWantedWeight(gangInfo),
-                money: (1.0 / rwmRatio) * bestUpgradeValue,
+                respect: GangUtilityFunctions.getRespectWeight(
+                    gangInfo,
+                    gangCount,
+                ),
+                wanted: GangUtilityFunctions.getWantedWeight(gangInfo),
+                money: bestUpgradeValue,
                 //money: GangUtilityFunctions.getMoneyWeight(bestUpgrade,gangInfo,),
             },
         };
     }
 
+    /**
+     * Calculates the weights during stage 1
+     * @param respectRemaining
+     * @param moneyRemaining
+     * @param gangMember
+     * @param gangInfo
+     * @param bestUpgradeValue
+     * @param gangCount
+     * @returns
+     */
     public static getStage1Weights(
         respectRemaining: number,
         moneyRemaining: number,
@@ -140,8 +166,7 @@ export class GangUtilityFunctions {
         wanted: number;
         money: number;
     } {
-        const rwmRatio =
-            GangUtilityFunctions.getEstimatedBuildUpPortion(gangInfo);
+        //singularity
         const respectBonus = respectRemaining > 0 ? 1.0 / respectRemaining : 0;
         const moneyBonus = respectRemaining > 0 ? 0 : 1.0 / moneyRemaining;
         return {
@@ -149,36 +174,22 @@ export class GangUtilityFunctions {
             ...GangUtilityFunctions.getExpWeights(gangMember, gangInfo),
             ...{
                 respect:
-                    (1.0 / rwmRatio) *
-                    (respectBonus +
-                        GangUtilityFunctions.getRepWeight(gangInfo, gangCount)),
-                wanted:
-                    (1.0 / rwmRatio) *
-                    GangUtilityFunctions.getWantedWeight(gangInfo),
-                money: (1.0 / rwmRatio) * (moneyBonus + bestUpgradeValue),
+                    respectBonus +
+                    GangUtilityFunctions.getRespectWeight(gangInfo, gangCount),
+                wanted: GangUtilityFunctions.getWantedWeight(gangInfo),
+                money: moneyBonus + bestUpgradeValue,
                 //GangUtilityFunctions.getMoneyWeight(bestUpgrade, gangInfo),
             },
         };
     }
 
-    public static getTimeEstimate(
-        powerRemaining: number,
-        gangMember: GangMemberInfo,
-        gangInfo: GangGenInfo,
-    ): number {
-        return (
-            powerRemaining /
-            ((gangMember.hack +
-                gangMember.str +
-                gangMember.def +
-                gangMember.dex +
-                gangMember.agi) /
-                95)
-        );
-    }
-
-    // Weights should be the decimal speed up per 1 point, we factor in remaining task percent outside of these
-
+    /**
+     * Calculates the weight for power
+     * @param powerRemaining
+     * @param gangMember
+     * @param gangInfo
+     * @returns
+     */
     public static getPowerWeight(
         powerRemaining: number,
         gangMember: GangMemberInfo,
@@ -199,6 +210,12 @@ export class GangUtilityFunctions {
         );
     }
 
+    /**
+     * Calculates the weight for EXP, slightly biased toward EXP
+     * @param gangMember
+     * @param gangInfo
+     * @returns
+     */
     public static getExpWeights(
         gangMember: GangMemberInfo,
         gangInfo: GangGenInfo,
@@ -224,12 +241,19 @@ export class GangUtilityFunctions {
         };
     }
 
-    public static getRepWeight(
+    /**
+     * Calculates the weight of respect.
+     * We provide a recruitment bonus because otherwise the greedy ass will just farm exp
+     * @param gangInfo
+     * @param gangCount
+     * @returns
+     */
+    public static getRespectWeight(
         gangInfo: GangGenInfo,
         gangCount: number,
     ): number {
         const newRecruitBonus =
-            (2 * 1) /
+            (newRecruitMulitplier * 1) /
             gangCount /
             (gangInfo.respectForNextRecruit - gangInfo.respect); // TODO: we could downscale but we really like recruitment
         return (
@@ -241,30 +265,23 @@ export class GangUtilityFunctions {
         );
     }
 
-    public static getMoneyWeight(
-        bestUpgradeValue: number,
-        gangInfo: GangGenInfo,
-    ): number {
-        return bestUpgradeValue;
-    }
-
+    /**
+     * Calculates the weight of wanted, slightly biased against in the early game
+     * to prevent respect stalls
+     * @param gangInfo
+     * @returns
+     */
     public static getWantedWeight(gangInfo: GangGenInfo): number {
-        // 20 is equivalent to 95%
-        const multi = Math.max(
-            20,
-            (gangInfo.respect + gangInfo.wantedLevel) / gangInfo.respect,
-        );
-        const rep =
-            (gangInfo.respect + 1) /
-                (gangInfo.respect + gangInfo.wantedLevel + 1) /
-                gangInfo.wantedPenalty -
-            1;
-
         return -1 / (gangInfo.respect + gangInfo.wantedLevel + 100);
-        //if (gangInfo.respect < 100) return -1 * rep;
-        //return -1 * multi * rep;
     }
 
+    /**
+     * Calculates the respect gain. replace with ns.formulas.gang.
+     * @param gangMember
+     * @param taskStats
+     * @param gangInfo
+     * @returns
+     */
     public static calculateRespectGain(
         gangMember: GangMemberInfo,
         taskStats: GangTaskStats,
@@ -298,6 +315,13 @@ export class GangUtilityFunctions {
         );
     }
 
+    /**
+     * Calcultes the wanted gain. resplace with ns.formulas.gang
+     * @param gangMember
+     * @param taskStats
+     * @param gangInfo
+     * @returns
+     */
     public static calculateWantedGain(
         gangMember: GangMemberInfo,
         taskStats: GangTaskStats,
@@ -331,6 +355,13 @@ export class GangUtilityFunctions {
         return Math.min(100, calc);
     }
 
+    /**
+     * Calcultes the money gain. resplace with ns.formulas.gang
+     * @param gangMember
+     * @param taskStats
+     * @param gangInfo
+     * @returns
+     */
     public static calculateMoneyGain(
         gangMember: GangMemberInfo,
         taskStats: GangTaskStats,
@@ -360,6 +391,12 @@ export class GangUtilityFunctions {
         );
     }
 
+    /**
+     * Calculates the exp gain shamelessly
+     * @param gangMember
+     * @param taskStats
+     * @returns
+     */
     public static calculateExpGain(
         gangMember: GangMemberInfo,
         taskStats: GangTaskStats,
@@ -443,6 +480,11 @@ export class GangUtilityFunctions {
         return expValues;
     }
 
+    /**
+     * Calculates the effective bonus from gaining exp via skills
+     * @param gangMember
+     * @returns
+     */
     public static calculateSkillDeltas(gangMember: GangMemberInfo): {
         hack: number;
         str: number;
@@ -515,14 +557,31 @@ export class GangUtilityFunctions {
         };
     }
 
+    /**
+     * Calculates the skill value without flooring
+     * @param exp Experience
+     * @param mult Level multi
+     * @returns
+     */
     public static calculateSkillSoft(exp: number, mult = 1): number {
         return Math.max(mult * (32 * Math.log(exp + 534.5) - 200), 1);
     }
 
+    /**
+     * Calculates exp to reach a specific skill level
+     * @param skill Skill level
+     * @param mult Level multi
+     * @returns
+     */
     public static calculateInvertedSoftSkill(skill: number, mult = 1): number {
         return Math.exp((skill / mult + 200) / 32) - 534.5;
     }
 
+    /**
+     * Calculates the effective bonus from progressing toward the next ascension
+     * @param gangMember
+     * @returns
+     */
     public static calculateAscensionDeltas(gangMember: GangMemberInfo): {
         hack: number;
         str: number;
@@ -583,6 +642,16 @@ export class GangUtilityFunctions {
         };
     }
 
+    /**
+     * Calculates the value of an ascension
+     * Multi is the average multiplier on stats
+     * avgTime is the expected amount of time to recover the lost levels (not exp, levels)
+     * We block ascensions if we would have our rep/money production via wanted
+     * @param ns NS
+     * @param gangMember
+     * @param gangInfo
+     * @returns
+     */
     public static calculateAscensionValue(
         ns: NS,
         gangMember: GangMemberInfo,
@@ -645,7 +714,7 @@ export class GangUtilityFunctions {
             return 0;
         }
 
-        ns.tprint(avgTime);
+        //ns.tprint(avgTime);
         if (multi <= 0 || avgTime <= 0) return 0;
         //ns.tprint(
         //    `Ascension: ${multi} / ${cost} ... ${GangUtilityFunctions.calculateAscensionMult(
@@ -656,11 +725,23 @@ export class GangUtilityFunctions {
         return Math.log1p(multi) / (avgTime + 0.01);
     }
 
+    /**
+     * Calculates the power of the ascension multi. replace with ns.formulas.gang
+     * @param points
+     * @returns
+     */
     public static calculateAscensionMult(points: number): number {
         if (points < 0) return -1;
         return Math.max(Math.pow(points / 2000, 0.5), 1);
     }
 
+    /**
+     * Calculates the expected power gain (PER TICK)
+     * Should be 100 ticks per territory update
+     * @param gangMember
+     * @param taskStats
+     * @returns
+     */
     public static getPowerGain(
         gangMember: GangMemberInfo,
         taskStats: GangTaskStats,
@@ -674,7 +755,7 @@ export class GangUtilityFunctions {
                     gangMember.dex +
                     gangMember.agi)) /
             95 /
-            100 // 100 cycles per update
+            100
         );
     }
 
@@ -705,14 +786,25 @@ export class GangUtilityFunctions {
         return chance * time;
     }
 
+    /**
+     * Calculates the name, value, and cost of the best upgrade for a gang member
+     * @param ns NS
+     * @param gangMember
+     * @returns
+     */
     public static bestUpgrade(
         ns: NS,
         gangMember: GangMemberInfo,
     ): { name: string; value: number; cost: number } {
-        return ns.gang.getEquipmentNames().reduce(
+        const possibleUpgrades = ns.gang
+            .getEquipmentNames()
+            .filter(
+                (name) =>
+                    !gangMember.upgrades.includes(name) &&
+                    !gangMember.augmentations.includes(name),
+            );
+        const best = possibleUpgrades.reduce(
             (best, name) => {
-                if (gangMember.upgrades.includes(name)) return best;
-
                 const cost = ns.gang.getEquipmentCost(name);
                 const stats = ns.gang.getEquipmentStats(name);
                 const sum =
@@ -737,29 +829,45 @@ export class GangUtilityFunctions {
                     return best;
                 }
             },
-            { name: 'None', value: 0, cost: 1e10 },
+            { name: 'None', value: 0, cost: 1e99 },
         );
+        //ns.tprint(
+        //    `${gangMember.name}: ${best.name}...${gangMember.upgrades.includes(best.name)}...${gangMember.augmentations.includes(best.name)}`,
+        //);
+        return best;
     }
 
     /**
      * Estimates the percentage of time that will be spent doing stuff
      * that depends on respectuation, money, or wanted
      * Informs us how to weigh the value of those tasks
+     * Currently made the fuck up
+     * @param gangInfo
+     * @returns
      */
-    public static getEstimatedBuildUpPortion(gangInfo: GangGenInfo): number {
-        return gangInfo.territory === 1 ? 0.9 : 0.5;
-    }
+    //public static getEstimatedBuildUpPortion(gangInfo: GangGenInfo): number {
+    //    return gangInfo.territory === 1 ? 0.9 : 0.5;
+    //}
 
+    /**
+     * Gets the target for power, we want to continue pushing power
+     * after the initial trigger
+     * @param ns NS
+     * @returns
+     */
     public static getPowerTarget(ns: NS): number {
         const highestGang = Math.max(
             ...Object.values(ns.gang.getOtherGangInformation()).map(
                 (g) => g.power,
             ),
         );
-        return Math.max(
-            highestGang * 2,
-            targetGangWinPower,
-            ns.gang.getGangInformation().power * 1.1,
+        return (
+            Math.max(
+                highestGang * 2,
+                targetGangWinPower,
+                ns.gang.getGangInformation().power * 1.1,
+            ) /
+            (ns.gang.getMemberNames().length + 0.01)
         );
     }
 }

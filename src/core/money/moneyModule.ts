@@ -56,7 +56,7 @@ export class MoneyModule extends BaseModule {
     //@BackgroundTask(60_000)
     //Scuffed for now because w/e
     purchaseGangEquipment() {
-        let bestUpgrade = this.gangModule!.bestUpgrade;
+        let bestUpgrade = this.gangModule!.bestUpgradeExternal;
         while (this.ns.getPlayer().money > bestUpgrade.cost) {
             if (
                 !this.ns.gang.purchaseEquipment(
@@ -69,7 +69,7 @@ export class MoneyModule extends BaseModule {
                 );
                 break;
             }
-            bestUpgrade = this.gangModule!.bestUpgrade;
+            bestUpgrade = this.gangModule!.bestUpgradeExternal;
         }
     }
 }

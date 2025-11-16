@@ -1,6 +1,6 @@
 //Blame Claude for this code. I just copied it from him.
 export class Heap<T> {
-    private heap: T[] = [];
+    public heap: T[] = [];
     constructor(private compare: (a: T, b: T) => number) {}
 
     push(value: T): void {
