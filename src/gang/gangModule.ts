@@ -261,7 +261,7 @@ export class GangModule extends BaseModule {
         return bestUpgrade;
     }
 
-    /** Temporary before core: how much respect to obtain */
+    /** Temporary before singularity: how much respect to obtain */
     private get respectRemaining(): number {
         const target = 5e5; //2.5e6 is red pill
         const favor = 0;
@@ -269,7 +269,7 @@ export class GangModule extends BaseModule {
         return target * (100 / (100 + favor)) * 1.1 * 75 - this.resEstimate;
     }
 
-    /** Temporary before core: how much money to obtain */
+    /** Temporary before singularity: how much money to obtain */
     private get moneyRemaining(): number {
         return this.ns.getPlayer().money * 2 + 1e10;
     }

@@ -4,7 +4,7 @@ export const targetGangWinPower = 1e3;
 /** A bonus to new recruitment to promote recruitment */
 export const newRecruitMulitplier = 2;
 
-export const gangMemberStatList = ['hack', 'str', 'def', 'dex', 'agi', 'cha'];
+/**export const gangMemberStatList = ['hack', 'str', 'def', 'dex', 'agi', 'cha'];
 export const gangMemberExpList = [
     'hack_exp',
     'str_exp',
@@ -12,7 +12,7 @@ export const gangMemberExpList = [
     'dex_exp',
     'agi_exp',
     'cha_exp',
-];
+];*/
 
 export function randomString(length: number): string {
     const chars =
