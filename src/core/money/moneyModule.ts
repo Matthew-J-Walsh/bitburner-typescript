@@ -123,7 +123,7 @@ export class MoneyModule extends BaseModule {
         const currentIncome = 1e8; //Singularity
         return (purchase: PurchaseEvaluation) =>
             remaining / currentIncome -
-            (moneyGoal - Math.min(purchase.cost, current)) /
+            (moneyGoal - Math.max(0, current - purchase.cost)) /
                 (currentIncome + purchase.income) +
             Math.max(0, purchase.cost - current) / currentIncome;
     }
