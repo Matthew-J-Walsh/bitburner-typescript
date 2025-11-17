@@ -6,12 +6,12 @@ import {
     ProcessID,
     scriptMapping,
 } from '/hacking/constants';
-import { ActiveScript } from '/hacking/hackingBatches';
+import { ActiveScript } from '/hacking/constants';
 
 /** Default class for ram task managers (hacking batch creators or fillers) */
 export class RamTaskManager {
     /**
-     * Default primary manage function
+     * Primary management function
      * @returns Time to be yielded to next
      */
     public manage(): Time {
@@ -19,7 +19,7 @@ export class RamTaskManager {
     }
 
     /**
-     * Default checking server method, checks how many threads are running on the server
+     * Checks how many fill threads are running on the server
      * @param server Server to check
      * @returns Number of threads
      */
@@ -28,7 +28,7 @@ export class RamTaskManager {
     }
 
     /**
-     * Default freeing server method, frees all instances on a server
+     * Frees all instances of the fill on a server
      * @param server Server to free
      * @returns number of threads freed
      */
@@ -39,6 +39,7 @@ export class RamTaskManager {
     /** Verifies assumptions about this are true */
     public integrityCheck(): void {}
 
+    /** Logs the state of this manager */
     public log(): Record<string, any> {
         return {};
     }
@@ -73,10 +74,6 @@ export class FillerRamTask extends RamTaskManager {
         }
     }
 
-    /**
-     * Primary management function
-     * @returns Time to be yielded to next
-     */
     public manage(): Time {
         const threads = Math.floor(
             Math.max(0, this.targetRamGetter() - this.managedRam) /
@@ -101,15 +98,24 @@ export class FillerRamTask extends RamTaskManager {
     public freeServer(server: Server): Threads {
         if (this.managedScripts.has(server.hostname)) {
             const ascript = this.managedScripts.get(server.hostname)!;
-            const success = this.kill(
-                this.managedScripts.get(server.hostname)!.pid,
-            );
+            this.kill(this.managedScripts.get(server.hostname)!.pid);
             this.managedScripts.delete(server.hostname);
             this.managedRam -= ascript.ramUsage;
             return ascript.threads;
         } else {
             return 0;
         }
+    }
+
+    /**
+     * Kills script managed
+     */
+    public killAll(): void {
+        this.managedScripts.forEach((ascript) => {
+            this.kill(ascript.pid);
+        });
+        this.managedScripts.clear();
+        this.managedRam = 0;
     }
 
     /** Verifies assumptions about this are true */
@@ -159,7 +165,7 @@ export class WeakenRamTask extends FillerRamTask {
         /** Targeted amount of ram to consume */
         protected targetRamGetter: () => number,
     ) {
-        super(ns, scriptMapping['weaken'], fill, kill, targetRamGetter);
+        super(ns, scriptMapping['weakenLooped'], fill, kill, targetRamGetter);
     }
 
     /**
@@ -167,16 +173,5 @@ export class WeakenRamTask extends FillerRamTask {
      */
     public freeServer(server: Server): Threads {
         return 0;
-    }
-
-    /**
-     * Kills script managed, call when target changes or server is fully weakened.
-     */
-    public killAll(): void {
-        this.managedScripts.forEach((ascript) => {
-            this.kill(ascript.pid);
-        });
-        this.managedScripts = new Map<string, ActiveScript>();
-        this.managedRam = 0;
     }
 }

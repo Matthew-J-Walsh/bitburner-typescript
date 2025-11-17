@@ -14,6 +14,8 @@ export const minimalTimeBetweenTwoScriptsEnding = 2000;
 export const maxPeriodForHackingSchedulingFunctions = 5_000;
 /** Time to wait if we aren't at minimum security */
 export const backupSecurityFailureSchedulingDelay = 5;
+/** Maximum hacked percent for stability */
+export const maximumHackedPercent = 0.9;
 
 /** General script type */
 export type ScriptType =
@@ -32,6 +34,7 @@ export const scriptMapping = {
     share: 'scripts/shareScript.js',
     stanek: 'scripts/stanekScript.js',
 };
+export const coreEffectedScripts: ScriptType[] = ['grow', 'weaken'];
 /** Type for strings related to hacking scripts */
 export type HackScriptType = 'hack' | 'grow' | 'weaken';
 /** Iterable for possible HackScriptTypes */
@@ -42,9 +45,12 @@ export type HackScriptRuntimes = { hack: Time; grow: Time; weaken: Time };
 export type HackingPolicy = {
     /** Home for do nothing */
     target: Server;
+    /** Time between hacks */
     spacing: number;
     /** Empty for weaken */
     sequence: HackingScript[];
+    /** What script should affect stocks */
+    stockScript?: ScriptType;
 };
 
 /** Structure of a grow batch */
@@ -85,4 +91,26 @@ export const scriptAvgCosts = {
     grow: (1.75 * 3.2) / 4.0,
     weaken: 1.75,
 };
-export const minimumAllowableBatchRam = growScriptSize + weakenScriptSize;
+export const minimumAllowableBatchRam =
+    2 * growScriptSize +
+    weakenScriptSize; /** Holds the information about an actively running script */
+
+export type ActiveScript = {
+    /** Hostname the script is running on */
+    hostname: string;
+    /** Thread count */
+    threads: Threads;
+    /** How much ram the script uses */
+    ramUsage: number;
+    /** The expected end time of the script */
+    endTime: Time;
+    /** Process id of the script */
+    pid: ProcessID;
+}; /** Holds information about a deadzone (not at minimum security) for hacking a server */
+
+export type Deadzone = {
+    /** When the deadzone will start */
+    start: Time;
+    /** When the deadzone will end */
+    end: Time;
+};

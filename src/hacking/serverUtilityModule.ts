@@ -33,20 +33,17 @@ export class ServerUtilityModule extends BaseModule {
         (a, b) => a.totalRam - b.totalRam,
     );
     /** List of crackers */
-    private crackers: { file: string; fn: (host: string) => boolean }[] = [];
-    /** List of hooks for server updates */
-    private serverUpdateHooks: Array<(server: Server) => void> = [];
+    private crackers: { file: string; fn: (host: string) => boolean }[] = [
+        { file: 'BruteSSH.exe', fn: this.ns.brutessh },
+        { file: 'FTPCrack.exe', fn: this.ns.ftpcrack },
+        { file: 'relaySMTP.exe', fn: this.ns.relaysmtp },
+        { file: 'HTTPWorm.exe', fn: this.ns.httpworm },
+        { file: 'SQLInject.exe', fn: this.ns.sqlinject },
+    ];
 
     constructor(ns: NS) {
         super(ns);
         this.fullServerScan();
-        this.crackers = [
-            { file: 'BruteSSH.exe', fn: this.ns.brutessh },
-            { file: 'FTPCrack.exe', fn: this.ns.ftpcrack },
-            { file: 'relaySMTP.exe', fn: this.ns.relaysmtp },
-            { file: 'HTTPWorm.exe', fn: this.ns.httpworm },
-            { file: 'SQLInject.exe', fn: this.ns.sqlinject },
-        ];
     }
 
     public registerBackgroundTasks(): BackgroundTask[] {
@@ -255,28 +252,21 @@ export class ServerUtilityModule extends BaseModule {
      * @param server Server
      */
     private placeScriptsOnServer(server: Server) {
-        const scripts = [
-            'scripts/growScript.js',
-            'scripts/hackScript.js',
-            'scripts/shareScript.js',
-            'scripts/stanekScript.js',
-            'scripts/weakenScript.js',
-            'scripts/weakenLoopedScript.js',
-        ];
+        const scripts = Object.values(scriptMapping);
         scripts.forEach((script) => {
-            //if (!this.ns.fileExists(script, server.hostname)) {
             this.ns.scp(script, server.hostname);
-            //}
         });
     }
 
-    public serverUpdateHook(fn: (server: Server) => void) {
-        this.serverUpdateHooks.push(fn);
-    }
-
+    /**
+     * Updates a server information
+     * @param hostname
+     * @returns
+     */
     private serverUpdate(hostname: string): Server {
         const server = this.ns.getServer(hostname);
-        this.serverUpdateHooks.forEach((hook) => hook(server));
+        // We set this as we don't depend on hackDifficulty ever anyway
+        server.hackDifficulty = server.minDifficulty;
         return server;
     }
 

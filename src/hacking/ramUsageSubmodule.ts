@@ -1,7 +1,6 @@
 import { NS } from '@ns';
-import { ProcessID } from 'hacking/constants';
-import { ActiveScript } from 'hacking/hackingBatches';
-import { ServerUtilityModule } from 'hacking/serverUtilityModule';
+import { ProcessID, ActiveScript } from '/hacking/constants';
+import { ServerUtilityModule } from '/hacking/serverUtilityModule';
 import { BaseModule } from '/lib/baseModule';
 import { KeyedMinHeap } from '/lib/keyedHeap';
 import { approximatelyEqual } from '/lib/misc';

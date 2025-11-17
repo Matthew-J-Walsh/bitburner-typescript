@@ -2,7 +2,8 @@ import { GangMemberInfo, NS } from '@ns';
 import { BaseModule } from '/lib/baseModule';
 import { GangUtilityFunctions } from './gangUtilityModule';
 import { BackgroundTask, PriorityTask } from '/lib/scheduler';
-import { randomString } from './constants';
+import { randomString } from '/gang/constants';
+import { PurchaseEvaluation } from '/core/money/moneyModule';
 
 /**
  * ### GangModule Uniqueness
@@ -97,8 +98,9 @@ export class GangModule extends BaseModule {
             };
             if (this.stage === 0) {
                 const powerRemaining =
-                    GangUtilityFunctions.getPowerTarget(this.ns) -
-                    gangInfo.power;
+                    (GangUtilityFunctions.getPowerTarget(this.ns) -
+                        gangInfo.power) /
+                    (this.ns.gang.getMemberNames().length + 0.01);
                 weights = GangUtilityFunctions.getStage0Weights(
                     this.ns,
                     powerRemaining,
@@ -150,7 +152,7 @@ export class GangModule extends BaseModule {
                 bestTask: bestTask,
             };
         });
-        this.ns.tprint(`Took ${Date.now() - startTime}ms to process gang`);
+        //this.ns.tprint(`Took ${Date.now() - startTime}ms to process gang`);
         //this.ns.tprint(
         //    `${JSON.stringify(GangUtilityFunctions.calculateAscensionDeltas(gangMembers[0]))}`,
         //);
@@ -170,7 +172,8 @@ export class GangModule extends BaseModule {
         if (
             Math.max(
                 ...Object.values(otherGangInfo).map((info) => info.power),
-            ) <= gangInfo.power
+            ) <= gangInfo.power &&
+            gangInfo.power > 100
         ) {
             if (!gangInfo.territoryWarfareEngaged)
                 this.ns.tprint(
@@ -216,6 +219,7 @@ export class GangModule extends BaseModule {
         name: string;
         value: number;
         cost: number;
+        effect: number;
     } {
         if (!this.ns.gang.inGang())
             return {
@@ -223,6 +227,7 @@ export class GangModule extends BaseModule {
                 name: 'not in gang',
                 value: 0,
                 cost: 1e99,
+                effect: 0,
             };
         const gangMembers = this.ns.gang
             .getMemberNames()
@@ -247,18 +252,25 @@ export class GangModule extends BaseModule {
     }
 
     /**
-     * Best upgrade externally, the value is only 1/2th of what is claimed.
-     * TODO: Money integration
+     * Best upgrade externally (for money generation).
+     * TODO: We do something weird here, where we rank purchases by a fixed formula but return the effect
      */
-    get bestUpgradeExternal(): {
-        member: string;
-        name: string;
-        value: number;
-        cost: number;
-    } {
+    get bestUpgradeExternal(): PurchaseEvaluation {
         let bestUpgrade = this.bestUpgrade;
-        bestUpgrade.value /= 12;
-        return bestUpgrade;
+        let income = this.ns.formulas.gang.moneyGain(
+            this.ns.gang.getGangInformation(),
+            this.ns.gang.getMemberInformation(bestUpgrade.member),
+            this.ns.gang.getTaskStats('Human Trafficking'),
+        ); //TODO, do we need a multiplier?
+        return {
+            income: income * this.bestUpgrade.effect,
+            cost: bestUpgrade.cost,
+            buy: () =>
+                this.ns.gang.purchaseEquipment(
+                    bestUpgrade.member,
+                    bestUpgrade.name,
+                ),
+        };
     }
 
     /** Temporary before singularity: how much respect to obtain */

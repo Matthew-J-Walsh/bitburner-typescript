@@ -14,37 +14,33 @@ import { GangModule } from './gang/gangModule';
 export async function main(ns: NS) {
     ns.disableLog('ALL');
 
-    const loggingModule = new LoggingModule(ns);
-    const serverUtilityModule = new ServerUtilityModule(ns);
-    const hackingUtilityModule = new HackingUtilityModule( // This can probably be contained within the scheduler
+    const modules: Record<string, BaseModule> = {};
+    modules['loggingModule'] = new LoggingModule(ns);
+    modules['serverUtilityModule'] = new ServerUtilityModule(ns);
+    modules['hackingUtilityModule'] = new HackingUtilityModule(
         ns,
-        serverUtilityModule,
+        modules['serverUtilityModule'] as ServerUtilityModule,
     );
-    const hackingSchedulerModule = new HackingSchedulerModule(
+    modules['hackingSchedulerModule'] = new HackingSchedulerModule(
         ns,
-        serverUtilityModule,
-        hackingUtilityModule,
+        modules['serverUtilityModule'] as ServerUtilityModule,
+        modules['hackingUtilityModule'] as HackingUtilityModule,
     );
-    const gangModule = new GangModule(ns);
+    modules['gangModule'] = new GangModule(ns);
 
-    const moneyModule = new MoneyModule(ns, serverUtilityModule, gangModule); //
-    const allModules: BaseModule[] = [
-        // make me a Record<string, BaseModule>
-        loggingModule,
-        serverUtilityModule,
-        hackingUtilityModule,
-        hackingSchedulerModule,
-        gangModule,
-        moneyModule,
-    ];
-    loggingModule.init(allModules);
+    modules['moneyModule'] = new MoneyModule(
+        ns,
+        modules['hackingUtilityModule'] as HackingUtilityModule,
+        modules['gangModule'] as GangModule,
+    ); //serverUtilityModule
+    (modules['loggingModule'] as LoggingModule).init(Object.values(modules));
 
-    const backgroundTasks = allModules.reduce(
+    const backgroundTasks = Object.values(modules).reduce(
         (tasks: BackgroundTask[], module: BaseModule) =>
             tasks.concat(module.registerBackgroundTasks()),
         [],
     );
-    const priorityTasks = allModules.reduce(
+    const priorityTasks = Object.values(modules).reduce(
         (tasks: PriorityTask[], module: BaseModule) =>
             tasks.concat(module.registerPriorityTasks()),
         [],

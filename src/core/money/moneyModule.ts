@@ -1,8 +1,18 @@
 import { NS } from '@ns';
 import { BaseModule } from '/lib/baseModule';
-import { ServerUtilityModule } from '/hacking/serverUtilityModule';
+import { HackingUtilityModule } from '/hacking/hackingUtilityModule';
 import { GangModule } from 'gang/gangModule';
 import { BackgroundTask, PriorityTask } from '/lib/scheduler';
+
+/** Type for everything that wants to get bought */
+export type PurchaseEvaluation = {
+    /** Bonus income in money per second */
+    income: number;
+    /** Instantaneous cost */
+    cost: number;
+    /** Purchase function to use */
+    buy: () => boolean;
+};
 
 /** ### MoneyModule Uniqueness
  * Handles all purchasing decisions
@@ -10,7 +20,7 @@ import { BackgroundTask, PriorityTask } from '/lib/scheduler';
 export class MoneyModule extends BaseModule {
     constructor(
         protected ns: NS,
-        protected serverUtilityModule?: ServerUtilityModule,
+        protected hackingUtilityModule?: HackingUtilityModule,
         protected gangModule?: GangModule,
     ) {
         super(ns);
@@ -19,16 +29,10 @@ export class MoneyModule extends BaseModule {
     public registerBackgroundTasks(): BackgroundTask[] {
         return [
             {
-                name: 'MoneyModule.purchaseServers',
-                fn: this.purchaseServers.bind(this),
+                name: 'MoneyModule.processPurchases',
+                fn: this.processPurchases.bind(this),
                 nextRun: 0,
-                interval: 60_000,
-            },
-            {
-                name: 'MoneyModule.purchaseGangEquipment',
-                fn: this.purchaseGangEquipment.bind(this),
-                nextRun: 0,
-                interval: 60_000,
+                interval: 10_000,
             },
         ];
     }
@@ -37,39 +41,96 @@ export class MoneyModule extends BaseModule {
         return [];
     }
 
-    //Scuffed for now because w/e
-    purchaseServers() {
-        return;
-        let [ramGained, cost] =
-            this.serverUtilityModule!.cheapestPurchasableServer();
-        while (this.ns.getPlayer().money > cost) {
-            if (!this.serverUtilityModule!.purchaseServer()) {
-                this.ns.tprint(
-                    `Some dumb bug in MoneyModule player=${this.ns.getPlayer().money}, ${cost}, ${ramGained}`,
-                );
+    public processPurchases() {
+        if (this.gangModule && this.gangModule.stage === 0) {
+            let purchase = this.gangModule.bestUpgradeExternal;
+            while (purchase.cost < this.ns.getPlayer().money) {
+                if (!purchase.buy()) {
+                    this.ns.tprint(
+                        `Some dumb bug in MoneyModule money=${this.ns.getPlayer().money} target=${JSON.stringify(purchase)}`,
+                    );
+                    break;
+                }
+                purchase = this.gangModule.bestUpgradeExternal;
+            }
+            return;
+        }
+
+        let i = 0;
+        while (i < 1000) {
+            i += 1;
+
+            const purchases = this.getPurchases;
+            const evaluatorFunction = this.getPurchaseEvaluator;
+            const evaluations = purchases.map(
+                (purchase: PurchaseEvaluation) => {
+                    return {
+                        evaluation: evaluatorFunction(purchase),
+                        purchase: purchase,
+                    };
+                },
+            );
+
+            const best = evaluations.reduce(
+                (best, val) => (val.evaluation > best.evaluation ? val : best),
+                evaluations[0],
+            );
+            if (best.purchase.cost < this.ns.getPlayer().money) {
+                if (!best.purchase.buy()) {
+                    this.ns.tprint(
+                        `Some dumb bug in MoneyModule money=${this.ns.getPlayer().money} target=${JSON.stringify(best)}`,
+                    );
+                    break;
+                }
+            } else {
                 break;
             }
-            [ramGained, cost] =
-                this.serverUtilityModule!.cheapestPurchasableServer();
         }
+        if (i === 1000)
+            this.ns.tprint(`i blocked an infinite loop in processPurchases`);
     }
-    //@BackgroundTask(60_000)
-    //Scuffed for now because w/e
-    purchaseGangEquipment() {
-        let bestUpgrade = this.gangModule!.bestUpgradeExternal;
-        while (this.ns.getPlayer().money > bestUpgrade.cost) {
-            if (
-                !this.ns.gang.purchaseEquipment(
-                    bestUpgrade.member,
-                    bestUpgrade.name,
-                )
-            ) {
-                this.ns.tprint(
-                    `Some dumb bug in MoneyModule player=${this.ns.getPlayer().money}, ${JSON.stringify(bestUpgrade)}`,
-                );
-                break;
-            }
-            bestUpgrade = this.gangModule!.bestUpgradeExternal;
-        }
+
+    //TODO: Register purchase
+    private get getPurchases(): PurchaseEvaluation[] {
+        const purchases: PurchaseEvaluation[] = [];
+        if (this.gangModule)
+            purchases.push(this.gangModule.bestUpgradeExternal);
+        if (this.hackingUtilityModule)
+            purchases.push(this.hackingUtilityModule.serverPurchaseEvaluation);
+        return purchases;
+    }
+
+    private get getPurchaseEvaluator(): (
+        purchase: PurchaseEvaluation,
+    ) => number {
+        return this.getPurchaseEvaluatorMoneyGoal;
+    }
+
+    /**
+     * When we have a money goal the value to maximize and garentee is > 0 is:
+     * R = Remaining = Goal - Current
+     * I = Current income
+     * a = Additional income from purchase
+     * c = Cost of purchase
+     * R/I - R/(I+a) + c/I
+     */
+    private get getPurchaseEvaluatorMoneyGoal(): (
+        purchase: PurchaseEvaluation,
+    ) => number {
+        return (purchase: PurchaseEvaluation) => 0;
+    }
+
+    /**
+     * When we have another goal the value to maximize and garentee is > 0 is:
+     * T = Time remaining
+     * I = Current income
+     * a = Additional income from purchase
+     * c = Cost of purchase
+     * a * (T - c/I)
+     */
+    private get getPurchaseEvaluatorOtherGoal(): (
+        purchase: PurchaseEvaluation,
+    ) => number {
+        return (purchase: PurchaseEvaluation) => 0;
     }
 }

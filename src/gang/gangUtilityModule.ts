@@ -123,6 +123,7 @@ export class GangUtilityFunctions {
     } {
         return {
             power: GangUtilityFunctions.getPowerWeight(
+                ns,
                 powerRemaining,
                 gangMember,
                 gangInfo,
@@ -195,6 +196,7 @@ export class GangUtilityFunctions {
      * @returns
      */
     public static getPowerWeight(
+        ns: NS,
         powerRemaining: number,
         gangMember: GangMemberInfo,
         gangInfo: GangGenInfo,
@@ -713,7 +715,7 @@ export class GangUtilityFunctions {
     public static bestUpgrade(
         ns: NS,
         gangMember: GangMemberInfo,
-    ): { name: string; value: number; cost: number } {
+    ): { name: string; value: number; cost: number; effect: number } {
         const possibleUpgrades = ns.gang
             .getEquipmentNames()
             .filter(
@@ -742,12 +744,17 @@ export class GangUtilityFunctions {
                         gangMember.cha);
                 const value = Math.log1p(effect) / cost;
                 if (value > best.value) {
-                    return { name: name, value: value, cost: cost };
+                    return {
+                        name: name,
+                        value: value,
+                        cost: cost,
+                        effect: effect,
+                    };
                 } else {
                     return best;
                 }
             },
-            { name: 'None', value: 0, cost: 1e99 },
+            { name: 'None', value: 0, cost: 1e99, effect: 0 },
         );
         //ns.tprint(
         //    `${gangMember.name}: ${best.name}...${gangMember.upgrades.includes(best.name)}...${gangMember.augmentations.includes(best.name)}`,
@@ -779,13 +786,10 @@ export class GangUtilityFunctions {
                 (g) => g.power,
             ),
         );
-        return (
-            Math.max(
-                highestGang * 2,
-                targetGangWinPower,
-                ns.gang.getGangInformation().power * 1.1,
-            ) /
-            (ns.gang.getMemberNames().length + 0.01)
+        return Math.max(
+            highestGang * 2,
+            targetGangWinPower,
+            ns.gang.getGangInformation().power * 1.1,
         );
     }
 }

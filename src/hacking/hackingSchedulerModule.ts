@@ -6,10 +6,11 @@ import {
     HackScriptType,
     ScriptType,
     scriptMapping,
+    coreEffectedScripts,
+    ActiveScript,
 } from '/hacking/constants';
 import { ServerUtilityModule } from '/hacking/serverUtilityModule';
 import { BackgroundTask, PriorityTask } from '/lib/scheduler';
-import { ActiveScript } from '/hacking/hackingBatches';
 import { RamTaskManager, FillerRamTask } from 'hacking/ramTaskManager';
 import { HackingRamTask } from '/hacking/hackingRamTask';
 import { RamUsageSubmodule } from '/hacking/ramUsageSubmodule';
@@ -58,7 +59,7 @@ export class HackingSchedulerModule extends RamUsageSubmodule {
                     endTime: Time,
                 ) => this.fire(target, script, threads, delay, endTime),
                 (target: string, threads: Threads) =>
-                    this.fill('weakenLooped', threads, 1, target),
+                    this.fill('weakenLooped', threads, 0, target),
                 this.kill.bind(this),
                 (reason: string) =>
                     this.ns.tprint(`Miss on Exp Gen for reason: ${reason}`),
@@ -67,7 +68,7 @@ export class HackingSchedulerModule extends RamUsageSubmodule {
             new FillerRamTask(
                 ns,
                 scriptMapping.share,
-                (threads: Threads) => this.fill('share', threads, 2),
+                (threads: Threads) => this.fill('share', threads, 1),
                 this.kill.bind(this),
                 () => hackingUtilityModule.shareRam,
             ),
@@ -117,12 +118,12 @@ export class HackingSchedulerModule extends RamUsageSubmodule {
         endTime: Time,
         ...args: ScriptArg[]
     ): number {
+        const coreEffected = coreEffectedScripts.includes(script);
         const neededRam = this.ns.getScriptRam(scriptMapping[script]) * threads;
-        const server = this.requestSingleRam(neededRam);
+        const server = this.requestSingleRam(neededRam, coreEffected);
         if (server) {
-            //this.ns.tprint(
-            //    `Starting script ${scriptMapping[script]} on ${server.hostname} @${target} with ${threads} threads. With an interal delay of ${delay}, expected to end in ${endTime - Date.now()}ms. This will take ${neededRam} RAM`,
-            //);
+            if (coreEffected)
+                threads = Math.ceil(threads / (1 + (server.cpuCores - 1) / 16));
             const pid = this.ns.exec(
                 scriptMapping[script],
                 server.hostname,
@@ -132,15 +133,9 @@ export class HackingSchedulerModule extends RamUsageSubmodule {
                 endTime,
                 ...args,
             );
-            //this.ns.tprint(`Pid of new script: ${pid}`);
             if (pid === 0) {
                 this.ns.tprint(
-                    `Fire failed: 
-                        ${scriptMapping[script]},
-                        ${server.hostname},
-                        ${threads},
-                        ${target}
-                    `,
+                    `Fire failed after aquiring server: ${scriptMapping[script]}, ${server.hostname}, ${threads}, ${target}`,
                 );
                 return 0;
             }
@@ -187,50 +182,45 @@ export class HackingSchedulerModule extends RamUsageSubmodule {
             }
 
             if (
-                server.maxRam - this.ns.getServerUsedRam(hostname) >
+                server.maxRam - this.ns.getServerUsedRam(hostname) <=
                 ramPerThread
-            ) {
-                neededThreads += this.taskList[priority].freeServer(server);
+            )
+                continue;
 
-                const threads = Math.min(
-                    Math.floor(
-                        (server.maxRam - this.ns.getServerUsedRam(hostname)) /
-                            ramPerThread,
-                    ),
-                    neededThreads,
+            neededThreads += this.taskList[priority].freeServer(server);
+
+            const threads = Math.min(
+                Math.floor(
+                    (server.maxRam - this.ns.getServerUsedRam(hostname)) /
+                        ramPerThread,
+                ),
+                neededThreads,
+            );
+
+            if (threads === 0) continue;
+
+            //this.ns.tprint(`${filename}, ${hostname}, ${threads}, ${args}`);
+            const pid = this.ns.exec(filename, hostname, threads, ...args);
+            if (pid === 0) {
+                this.ns.tprint(
+                    `Fill failed on an open server: ${filename}, ${hostname}, ${threads}, ${args}, ${server.maxRam} - ${this.ns.getServerUsedRam(hostname)}`,
                 );
-
-                if (threads !== 0) {
-                    //this.ns.tprint(`${filename}, ${hostname}, ${threads}, ${args}`);
-                    const pid = this.ns.exec(
-                        filename,
-                        hostname,
-                        threads,
-                        ...args,
-                    );
-                    if (pid === 0) {
-                        this.ns.tprint(
-                            `Fill failed: ${
-                                filename
-                            }, ${hostname}, ${threads}, ${args}
-                    `,
-                        );
-                    }
-                    const ascript = {
-                        hostname: hostname,
-                        threads: threads,
-                        ramUsage: threads * ramPerThread,
-                        endTime: Infinity,
-                        pid: pid,
-                    };
-                    newPids.push(ascript);
-
-                    // We need to push this as an active script as we cannot cancel it if this is a hacking script
-                    if (priority < 2) this.pushActiveScipt(ascript);
-                }
-
-                neededThreads -= threads;
+                continue;
             }
+
+            const ascript = {
+                hostname: hostname,
+                threads: threads,
+                ramUsage: threads * ramPerThread,
+                endTime: Infinity,
+                pid: pid,
+            };
+            newPids.push(ascript);
+
+            // We need to push this as an active script as we cannot cancel it if this is a hacking script
+            if (priority < 2) this.pushActiveScipt(ascript);
+
+            neededThreads -= threads;
         }
         return newPids;
     }
@@ -242,7 +232,7 @@ export class HackingSchedulerModule extends RamUsageSubmodule {
      */
     protected requestSingleRam(
         neededRam: number,
-        coreEffected?: boolean,
+        coreEffected: boolean,
     ): Server | null {
         const result = this.priorityRamSpaceUsed.findNext(neededRam);
         if (result) {

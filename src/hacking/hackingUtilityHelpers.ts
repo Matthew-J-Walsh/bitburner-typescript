@@ -1,4 +1,4 @@
-import { NS, Server, Player } from '@ns';
+import { NS, Server } from '@ns';
 import {
     HackingScript,
     hackFort,
@@ -12,10 +12,9 @@ import {
     HackingPolicy,
     scriptAvgCosts,
     minimumAllowableBatchRam,
-} from './constants';
+    maximumHackedPercent,
+} from '/hacking/constants';
 import { lambertWApprox } from '/lib/math/lambertW';
-
-// Formulas should be free, change my mind
 
 export class HackingUtilityHelpers {
     /**
@@ -32,8 +31,12 @@ export class HackingUtilityHelpers {
         hackCount: number,
     ): HackingScript[] {
         const hackedPercent = ns.hackAnalyze(server.hostname);
-        hackCount = Math.min(Math.floor(0.9 / hackedPercent), hackCount);
-        let hackedFraction = Math.min(hackedPercent * hackCount);
+        hackCount = Math.min(
+            Math.floor(maximumHackedPercent / hackedPercent),
+            hackCount,
+        );
+        //we add a small fraction to make sure we grow with hacknet server effects
+        let hackedFraction = hackedPercent * hackCount + 0.01;
 
         const growthFactor = 1 / (1 - hackedFraction);
         const growCount = Math.ceil(
@@ -201,9 +204,12 @@ export class HackingUtilityHelpers {
             { script: 'weaken', threads: weakenCount },
         ];
 
-        if (HackingUtilityHelpers.sequenceMaxRam(seq) > ramPerBatch * 1.1) {
+        if (
+            HackingUtilityHelpers.sequenceMaxRam(seq) >
+            ramPerBatch * 1.05 + 3
+        ) {
             ns.alert(
-                `Warning! somehow overshot RAM: ${ramAllocation}, ${batches}, ${hackCount}, ${weakenCount}, ${HackingUtilityHelpers.sequenceMaxRam(seq)}`,
+                `Warning! somehow overshot HW RAM: ${ramAllocation}, ${batches}, ${hackCount}, ${weakenCount}, ${HackingUtilityHelpers.sequenceMaxRam(seq)}`,
             );
             return [];
         }
@@ -243,9 +249,12 @@ export class HackingUtilityHelpers {
             { script: 'weaken', threads: weakenCount },
         ];
 
-        if (HackingUtilityHelpers.sequenceMaxRam(seq) > ramPerBatch * 1.1) {
+        if (
+            HackingUtilityHelpers.sequenceMaxRam(seq) >
+            ramPerBatch * 1.05 + 3
+        ) {
             ns.alert(
-                `Warning! somehow overshot RAM: ${ramAllocation}, ${batches}, ${growCount}, ${weakenCount}, ${HackingUtilityHelpers.sequenceMaxRam(seq)}`,
+                `Warning! somehow overshot GW RAM: ${ramAllocation}, ${batches}, ${growCount}, ${weakenCount}, ${HackingUtilityHelpers.sequenceMaxRam(seq)}`,
             );
             return [];
         }
@@ -253,7 +262,15 @@ export class HackingUtilityHelpers {
         return seq;
     }
 
-    //TODO: Left off here. do
+    /**
+     * Generates a hacking script policy
+     * @param ns
+     * @param target
+     * @param ramAllocation
+     * @param structure
+     * @param getSeq
+     * @returns
+     */
     public static generateHackScriptPolicy(
         ns: NS,
         target: Server,
@@ -279,7 +296,14 @@ export class HackingUtilityHelpers {
         };
     }
 
+    /**
+     * Evaluates a hacking policies ability to generate money
+     * @param ns
+     * @param policy
+     * @returns
+     */
     public static hackPolicyMoneyEval(ns: NS, policy: HackingPolicy): number {
+        if (policy.sequence.length !== 4) return 0;
         return (
             (policy.target.moneyMax! *
                 ns.hackAnalyze(policy.target.hostname) *
@@ -288,6 +312,22 @@ export class HackingUtilityHelpers {
         );
     }
 
+    /**
+     * Evaluates a hacking policies ability to generate money via stock changes
+     * @param ns
+     * @param policy
+     * @returns
+     */
+    public static hackPolicyStockEval(ns: NS, policy: HackingPolicy): number {
+        throw new Error('Not implemented: hackPolicyStockEval');
+    }
+
+    /**
+     * Evaluates a hacking policies ability to generate exp
+     * @param ns
+     * @param policy
+     * @returns
+     */
     public static hackPolicyExpEval(ns: NS, policy: HackingPolicy): number {
         return (
             (ns.formulas.hacking.hackExp(policy.target, ns.getPlayer()) *
