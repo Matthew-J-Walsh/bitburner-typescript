@@ -117,7 +117,7 @@ export class MoneyModule extends BaseModule {
     private get getPurchaseEvaluatorMoneyGoal(): (
         purchase: PurchaseEvaluation,
     ) => number {
-        return (purchase: PurchaseEvaluation) => 0;
+        return (purchase: PurchaseEvaluation) => 1.0 / purchase.cost;
     }
 
     /**
@@ -131,6 +131,6 @@ export class MoneyModule extends BaseModule {
     private get getPurchaseEvaluatorOtherGoal(): (
         purchase: PurchaseEvaluation,
     ) => number {
-        return (purchase: PurchaseEvaluation) => 0;
+        return (purchase: PurchaseEvaluation) => 1.0 / purchase.cost;
     }
 }
