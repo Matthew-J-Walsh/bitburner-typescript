@@ -117,7 +117,15 @@ export class MoneyModule extends BaseModule {
     private get getPurchaseEvaluatorMoneyGoal(): (
         purchase: PurchaseEvaluation,
     ) => number {
-        return (purchase: PurchaseEvaluation) => 1.0 / purchase.cost;
+        const moneyGoal = 1e11; //Singularity
+        const current = this.ns.getPlayer().money;
+        const remaining = Math.max(moneyGoal - current, 0);
+        const currentIncome = 1e8; //Singularity
+        return (purchase: PurchaseEvaluation) =>
+            remaining / currentIncome -
+            (moneyGoal - Math.min(purchase.cost, current)) /
+                (currentIncome + purchase.income) +
+            Math.max(0, purchase.cost - current) / currentIncome;
     }
 
     /**
@@ -131,6 +139,9 @@ export class MoneyModule extends BaseModule {
     private get getPurchaseEvaluatorOtherGoal(): (
         purchase: PurchaseEvaluation,
     ) => number {
-        return (purchase: PurchaseEvaluation) => 1.0 / purchase.cost;
+        const timeRemaining = 10_000; //Singularity
+        const currentIncome = 1e8; //Singularity
+        return (purchase: PurchaseEvaluation) =>
+            purchase.income * (timeRemaining - purchase.cost / currentIncome);
     }
 }
