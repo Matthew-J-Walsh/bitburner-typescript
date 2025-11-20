@@ -1,59 +1,70 @@
 import { NS } from '@ns';
-import { BackgroundTask, PriorityTask, Scheduler } from '/lib/scheduler';
-import { BaseModule } from '/lib/baseModule';
 
-// Loaded modules:
-//import { TestingModule, TestingModuleTwo } from '/testing/testingModule';
-import { LoggingModule } from '/lib/loggingModule';
 import { ServerUtilityModule } from './hacking/serverUtilityModule';
 import { HackingUtilityModule } from './hacking/hackingUtilityModule';
 import { HackingSchedulerModule } from './hacking/hackingSchedulerModule';
-import { MoneyModule } from './core/money/moneyModule';
-import { GangModule } from './gang/gangModule';
+
+/**
+ * Handles RAM management
+ */
 
 export async function main(ns: NS) {
     ns.disableLog('ALL');
 
-    const modules: Record<string, BaseModule> = {};
-    modules['loggingModule'] = new LoggingModule(ns);
-    modules['serverUtilityModule'] = new ServerUtilityModule(ns);
-    modules['hackingUtilityModule'] = new HackingUtilityModule(
+    const scriptsToFire = [
+        'gang.js',
+        //
+    ];
+
+    const serverUtilityModule = new ServerUtilityModule(ns, scriptsToFire);
+    const hackingUtilityModule = new HackingUtilityModule(
         ns,
-        modules['serverUtilityModule'] as ServerUtilityModule,
+        serverUtilityModule,
     );
-    modules['hackingSchedulerModule'] = new HackingSchedulerModule(
+    const hackingSchedulerModule = new HackingSchedulerModule(
         ns,
-        modules['serverUtilityModule'] as ServerUtilityModule,
-        modules['hackingUtilityModule'] as HackingUtilityModule,
-    );
-    modules['gangModule'] = new GangModule(ns);
-
-    modules['moneyModule'] = new MoneyModule(
-        ns,
-        modules['hackingUtilityModule'] as HackingUtilityModule,
-        modules['gangModule'] as GangModule,
-    ); //serverUtilityModule
-    (modules['loggingModule'] as LoggingModule).init(Object.values(modules));
-
-    const backgroundTasks = Object.values(modules).reduce(
-        (tasks: BackgroundTask[], module: BaseModule) =>
-            tasks.concat(module.registerBackgroundTasks()),
-        [],
-    );
-    const priorityTasks = Object.values(modules).reduce(
-        (tasks: PriorityTask[], module: BaseModule) =>
-            tasks.concat(module.registerPriorityTasks()),
-        [],
+        serverUtilityModule,
+        hackingUtilityModule,
     );
 
-    const scheduler = new Scheduler(ns, priorityTasks, backgroundTasks);
-
-    ns.tprint(
-        `Scheduler initialized with ${priorityTasks.length} priority tasks, and ${backgroundTasks.length} background tasks.`,
-    );
+    const subProcesses: {
+        nextRun: number;
+        fn: () => number;
+    }[] = [
+        {
+            nextRun: 0,
+            fn: serverUtilityModule.rootServers,
+        },
+        {
+            nextRun: 0,
+            fn: serverUtilityModule.refreshTargetable,
+        },
+        {
+            nextRun: 0,
+            fn: hackingUtilityModule.moneyUpdate,
+        },
+        {
+            nextRun: 0,
+            fn: hackingUtilityModule.expUpdate,
+        },
+        {
+            nextRun: 0,
+            fn: hackingUtilityModule.decideRamProportioning,
+        },
+        {
+            nextRun: 0,
+            fn: hackingSchedulerModule.update,
+        },
+    ];
 
     while (true) {
-        const sleepTime = await scheduler.fire();
-        await ns.sleep(Math.max(1, sleepTime));
+        let now = Date.now();
+        const nextRun = hackingSchedulerModule.manageActiveScripts();
+        if (nextRun > now + 100)
+            subProcesses.forEach((subprocess) => {
+                if (now >= subprocess.nextRun)
+                    subprocess.nextRun = subprocess.fn();
+            });
+        await ns.sleep(Math.max(1, nextRun));
     }
 }

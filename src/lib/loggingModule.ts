@@ -16,7 +16,7 @@ export class LoggingModule extends BaseModule {
 
     public constructor(protected ns: NS) {
         super(ns);
-        this.filename = '/logs/BN-2-1.txt';
+        this.filename = '/logs/BN-1-2.txt';
         this.ns.tprint(`Logging to file: ${this.filename}`);
     }
 

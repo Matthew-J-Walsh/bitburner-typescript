@@ -75,31 +75,6 @@ export class HackingSchedulerModule extends RamUsageSubmodule {
         ];
     }
 
-    public registerBackgroundTasks(): BackgroundTask[] {
-        return super.registerBackgroundTasks().concat([
-            {
-                name: 'RamUsageSubmodule.update',
-                fn: this.update.bind(this),
-                nextRun: 0,
-                interval: 60_000,
-            },
-        ]);
-    }
-
-    public registerPriorityTasks(): PriorityTask[] {
-        return super.registerPriorityTasks().concat([
-            {
-                name: 'HackingSchedulerModule.manageActiveScripts',
-                fn: this.manageActiveScripts.bind(this),
-                nextRun: 0,
-            },
-        ]);
-    }
-
-    public update(): void {
-        super.update();
-    }
-
     /**
      * Fires off a priority script with a particular amount of threads
      * @param target Target server of the script

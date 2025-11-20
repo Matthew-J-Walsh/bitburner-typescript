@@ -95,8 +95,8 @@ export class MoneyModule extends BaseModule {
         const purchases: PurchaseEvaluation[] = [];
         if (this.gangModule)
             purchases.push(this.gangModule.bestUpgradeExternal);
-        if (this.hackingUtilityModule)
-            purchases.push(this.hackingUtilityModule.serverPurchaseEvaluation);
+        //if (this.hackingUtilityModule)
+        //    purchases.push(this.hackingUtilityModule.serverPurchaseEvaluation);
         return purchases;
     }
 

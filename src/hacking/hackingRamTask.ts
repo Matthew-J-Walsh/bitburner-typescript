@@ -120,7 +120,7 @@ export class HackingRamTask extends RamTaskManager {
             batchInternalDelay,
         ); // why the fuck is this split
         batch.children.forEach(([script, element]) => {
-            this.ns.tprint(`$${script}: ${JSON.stringify(element)}`);
+            //this.ns.tprint(`$${script}: ${element}`); //We cannot stringify elements q.q
             this.scriptQueues[script].push(element);
         });
         if (batch.children.length !== 0) {
@@ -276,7 +276,7 @@ export class HackingRamTask extends RamTaskManager {
                  * We add a small additional time due to delay concerns for very short scripts
                  */
                 (this.scriptQueues[script].peek()?.endTime ?? Infinity) <=
-                nextManageEndTimes[script] + batchInternalDelay
+                nextManageEndTimes[script] + batchInternalDelay + 100
             ) {
                 const elem = this.scriptQueues[script].pop()!;
                 if (

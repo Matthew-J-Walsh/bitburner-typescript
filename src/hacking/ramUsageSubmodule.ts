@@ -18,7 +18,7 @@ type RamSpace = {
 };
 
 /** Only submodule of hacking module, handles ram management, provides wrappers to simplify ram management for everything else */
-export class RamUsageSubmodule extends BaseModule {
+export class RamUsageSubmodule {
     /** Datastructure storing how much of each sever's ram is used by priority tasks */
     protected priorityRamSpaceUsed: SortedArray<string, RamSpace> =
         new SortedArray<string, RamSpace>(
@@ -35,22 +35,12 @@ export class RamUsageSubmodule extends BaseModule {
     constructor(
         protected ns: NS,
         protected serverUtilityModule: ServerUtilityModule,
-    ) {
-        super(ns);
-    }
-
-    public registerBackgroundTasks(): BackgroundTask[] {
-        return [];
-    }
-
-    public registerPriorityTasks(): PriorityTask[] {
-        return [];
-    }
+    ) {}
 
     /**
      * Updates all the server changes
      */
-    update(): void {
+    update(): number {
         const thisScript = this.ns.getRunningScript()!;
         this.serverUtilityModule.ourServers.forEach((server) => {
             if (!this.priorityRamSpaceUsed.getByKey(server.hostname)) {
@@ -83,6 +73,7 @@ export class RamUsageSubmodule extends BaseModule {
                 }
             }
         });
+        return Date.now() + 60_000;
     }
 
     /**

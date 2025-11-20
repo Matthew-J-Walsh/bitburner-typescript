@@ -1,7 +1,5 @@
 import { GangMemberInfo, NS } from '@ns';
-import { BaseModule } from '/lib/baseModule';
 import { GangUtilityFunctions } from './gangUtilityModule';
-import { BackgroundTask, PriorityTask } from '/lib/scheduler';
 import { randomString } from '/gang/constants';
 import { PurchaseEvaluation } from '/core/money/moneyModule';
 
@@ -9,9 +7,7 @@ import { PurchaseEvaluation } from '/core/money/moneyModule';
  * ### GangModule Uniqueness
  * This modules handles the full managment of the gang
  */
-export class GangModule extends BaseModule {
-    /** What stage the gang is in, territory === 1 */
-    stage: number = 0;
+export class GangModule {
     /** Log storage */
     logInfo: Record<string, any> = {};
     /** Estimated amount of respect gained, needed because no singularity to check repuation */
@@ -20,44 +16,14 @@ export class GangModule extends BaseModule {
     resMem: number = 0;
 
     constructor(protected ns: NS) {
-        super(ns);
         if (!this.ns.gang.inGang()) this.ns.gang.createGang('Slum Snakes');
         if (this.ns.gang.inGang()) {
             this.resMem = this.ns.gang.getGangInformation().respect;
-            if (this.ns.gang.getGangInformation().territory === 1)
-                this.stage = 1;
         }
-    }
-
-    public registerBackgroundTasks(): BackgroundTask[] {
-        return [
-            {
-                name: 'GangModule.manageStage1',
-                fn: this.manageStage1.bind(this),
-                nextRun: 0,
-                interval: 10_000,
-            },
-        ];
-    }
-
-    public registerPriorityTasks(): PriorityTask[] {
-        return [
-            {
-                name: 'GangModule.manageStage0',
-                fn: this.manageStage0.bind(this),
-                nextRun: 0,
-            },
-        ];
     }
 
     /** Primary management function, updates the gang members tasks */
-    private manage(): number {
-        if (!this.ns.gang.inGang()) {
-            if (!this.ns.gang.createGang('Slum Snakes')) {
-                return Date.now() + 10_000;
-            }
-        }
-
+    manage(): void {
         const startTime = Date.now();
         while (this.ns.gang.canRecruitMember())
             this.ns.gang.recruitMember(randomString(10));
@@ -66,8 +32,6 @@ export class GangModule extends BaseModule {
         this.logInfo['gangInfo'] = gangInfo;
         this.resEstimate += gangInfo.respect - this.resMem;
         this.resMem = gangInfo.respect;
-
-        if (gangInfo.territory === 1) this.stage = 1;
 
         const otherGangInfo = this.ns.gang.getOtherGangInformation();
         this.logInfo['otherGangInfo'] = otherGangInfo;
@@ -83,6 +47,16 @@ export class GangModule extends BaseModule {
                 : 0;
         this.logInfo['bestUpgrade'] = bestUpgrade;
         this.logInfo['members'] = {};
+
+        let territoryCleanup =
+            Math.max(
+                ...Object.entries(otherGangInfo).map(([name, info]) =>
+                    name === gangInfo.faction ? 0 : info.power,
+                ),
+            ) <=
+                gangInfo.power / 25 && gangInfo.territory !== 1;
+        let oneFighting = !territoryCleanup;
+
         gangMembers.forEach((gangMember: GangMemberInfo) => {
             let weights: {
                 power: number;
@@ -96,7 +70,7 @@ export class GangModule extends BaseModule {
                 wanted: number;
                 money: number;
             };
-            if (this.stage === 0) {
+            if (gangInfo.territory !== 1 && !territoryCleanup) {
                 const powerRemaining =
                     (GangUtilityFunctions.getPowerTarget(this.ns) -
                         gangInfo.power) /
@@ -144,7 +118,12 @@ export class GangModule extends BaseModule {
                 (best, [key, value]) => (value > taskValues[best] ? key : best),
                 'Ascend',
             );
-            this.setTask(gangMember.name, bestTask);
+            if (!oneFighting) {
+                this.setTask(gangMember.name, 'Territory Warfare');
+                oneFighting = true;
+            } else {
+                this.setTask(gangMember.name, bestTask);
+            }
 
             this.logInfo['members'][gangMember.name] = {
                 weights: weights,
@@ -181,20 +160,6 @@ export class GangModule extends BaseModule {
                 );
             this.ns.gang.setTerritoryWarfare(true);
         }
-
-        return Date.now() + (this.ns.gang.getBonusTime() > 0 ? 4_000 : 10_000); //I dont fucking know dude
-    }
-
-    /** A prioirty task until we have full territory */
-    manageStage0(): number {
-        if (this.stage === 1) return Date.now() + 100_000;
-        return this.manage();
-    }
-
-    /** A background task after speed matters less */
-    manageStage1(): number {
-        if (this.stage === 0) return Date.now() + 100_000;
-        return this.manage();
     }
 
     /**
@@ -275,7 +240,7 @@ export class GangModule extends BaseModule {
 
     /** Temporary before singularity: how much respect to obtain */
     private get respectRemaining(): number {
-        const target = 5e5; //2.5e6 is red pill
+        const target = 1e6; //2.5e6 is red pill
         const favor = 0;
 
         return target * (100 / (100 + favor)) * 1.1 * 75 - this.resEstimate;
@@ -290,7 +255,6 @@ export class GangModule extends BaseModule {
         return {
             ...this.logInfo,
             ...{
-                stage: this.stage,
                 resEstimate: this.resEstimate,
                 respectRemaining: this.respectRemaining,
                 moneyRemaining: this.moneyRemaining,

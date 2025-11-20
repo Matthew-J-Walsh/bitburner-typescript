@@ -1,8 +1,6 @@
 import { NS, Server } from '@ns';
-import { BaseModule } from '/lib/baseModule';
 import { Heap } from '/lib/heap';
 import { purchasedServerPrefix, scriptMapping } from '/hacking/constants';
-import { BackgroundTask, PriorityTask } from '/lib/scheduler';
 
 type PurchasedServer = {
     hostname: string;
@@ -15,7 +13,7 @@ type PurchasedServer = {
  * It provides access to lists of servers that are possible hacking targets.
  * It provides aceces to lists of servers that can have their RAM utilized.
  */
-export class ServerUtilityModule extends BaseModule {
+export class ServerUtilityModule {
     /** Full map of servers */
     public servers: Map<string, Server> = new Map<string, Server>();
     /** Map of servers that we have admin of */
@@ -33,38 +31,25 @@ export class ServerUtilityModule extends BaseModule {
         (a, b) => a.totalRam - b.totalRam,
     );
     /** List of crackers */
-    private crackers: { file: string; fn: (host: string) => boolean }[] = [
-        { file: 'BruteSSH.exe', fn: this.ns.brutessh },
-        { file: 'FTPCrack.exe', fn: this.ns.ftpcrack },
-        { file: 'relaySMTP.exe', fn: this.ns.relaysmtp },
-        { file: 'HTTPWorm.exe', fn: this.ns.httpworm },
-        { file: 'SQLInject.exe', fn: this.ns.sqlinject },
-    ];
+    private crackers!: { file: string; fn: (host: string) => boolean }[];
+    /** Reserved ram */
+    private reservedRam!: number;
 
-    constructor(ns: NS) {
-        super(ns);
-        this.fullServerScan();
-    }
-
-    public registerBackgroundTasks(): BackgroundTask[] {
-        return [
-            {
-                name: 'ServerUtilityModule.rootServers',
-                fn: this.rootServers.bind(this),
-                nextRun: 0,
-                interval: 300_000,
-            },
-            {
-                name: 'ServerUtilityModule.refreshTargetable',
-                fn: this.refreshTargetable.bind(this),
-                nextRun: 0,
-                interval: 300_000,
-            },
+    constructor(
+        protected ns: NS,
+        otherScripts: string[],
+    ) {
+        this.crackers = [
+            { file: 'BruteSSH.exe', fn: this.ns.brutessh },
+            { file: 'FTPCrack.exe', fn: this.ns.ftpcrack },
+            { file: 'relaySMTP.exe', fn: this.ns.relaysmtp },
+            { file: 'HTTPWorm.exe', fn: this.ns.httpworm },
+            { file: 'SQLInject.exe', fn: this.ns.sqlinject },
         ];
-    }
-
-    public registerPriorityTasks(): PriorityTask[] {
-        return [];
+        this.fullServerScan();
+        this.rootServers();
+        this.refreshTargetable();
+        this.startScripts(otherScripts);
     }
 
     /** Scans all servers, refreshing the server record */
@@ -118,8 +103,24 @@ export class ServerUtilityModule extends BaseModule {
         }
     }
 
+    /**
+     * Starts some scripts when this module loads
+     * @param scriptsToFire list of scripts to run
+     */
+    startScripts(scriptsToFire: string[]): void {
+        const thisScript = this.ns.getRunningScript()!;
+        const hostname = thisScript.server;
+        scriptsToFire.forEach((script) => this.ns.exec(script, hostname));
+        this.reservedRam =
+            thisScript.ramUsage +
+            scriptsToFire.reduce(
+                (ramUsage, script) => ramUsage + this.ns.getScriptRam(script),
+                0,
+            );
+    }
+
     /** Tries to root more servers */
-    rootServers(): void {
+    rootServers(): number {
         const crackers = this.crackers.filter((cracker) =>
             this.ns.fileExists(cracker.file, 'home'),
         );
@@ -142,10 +143,12 @@ export class ServerUtilityModule extends BaseModule {
                 return true;
             },
         );
+
+        return Date.now() + 300_000;
     }
 
     /** Refreshes targetable server list */
-    refreshTargetable(): void {
+    refreshTargetable(): number {
         const currentHackingLevel = this.ns.getHackingLevel();
 
         this.futureTargetableServers = this.futureTargetableServers.filter(
@@ -161,6 +164,8 @@ export class ServerUtilityModule extends BaseModule {
                 }
             },
         );
+
+        return Date.now() + 300_000;
     }
 
     /** Buys the least expensive RAM */
@@ -243,9 +248,11 @@ export class ServerUtilityModule extends BaseModule {
             Array.from(this.ourServers.values()).reduce(
                 (acc, server) => acc + server.maxRam,
                 0,
-            ) - this.ns.ramOverride()
+            ) - this.reservedRam
         );
     }
+
+    //get maximumServerRam()
 
     /**
      * Places scripts on a server to be run later
