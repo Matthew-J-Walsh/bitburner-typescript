@@ -1,6 +1,7 @@
 import { NS, Server } from '@ns';
 import { Heap } from '/lib/heap';
 import { purchasedServerPrefix, scriptMapping } from '/hacking/constants';
+import { LoggingUtility } from '/lib/loggingUtils';
 
 type PurchasedServer = {
     hostname: string;
@@ -34,18 +35,25 @@ export class ServerUtilityModule {
     private crackers!: { file: string; fn: (host: string) => boolean }[];
     /** Reserved ram */
     private reservedRam!: number;
+    /** Logger */
+    public logger!: LoggingUtility;
 
     constructor(
         protected ns: NS,
         otherScripts: string[],
     ) {
         this.crackers = [
-            { file: 'BruteSSH.exe', fn: this.ns.brutessh },
-            { file: 'FTPCrack.exe', fn: this.ns.ftpcrack },
-            { file: 'relaySMTP.exe', fn: this.ns.relaysmtp },
-            { file: 'HTTPWorm.exe', fn: this.ns.httpworm },
-            { file: 'SQLInject.exe', fn: this.ns.sqlinject },
+            { file: 'BruteSSH.exe', fn: this.ns.brutessh.bind(this.ns) },
+            { file: 'FTPCrack.exe', fn: this.ns.ftpcrack.bind(this.ns) },
+            { file: 'relaySMTP.exe', fn: this.ns.relaysmtp.bind(this.ns) },
+            { file: 'HTTPWorm.exe', fn: this.ns.httpworm.bind(this.ns) },
+            { file: 'SQLInject.exe', fn: this.ns.sqlinject.bind(this.ns) },
         ];
+        this.logger = new LoggingUtility(
+            ns,
+            'serverUtility',
+            this.log.bind(this),
+        );
         this.fullServerScan();
         this.rootServers();
         this.refreshTargetable();

@@ -4,7 +4,7 @@ import { BaseModule } from '/lib/baseModule';
 
 // Loaded modules:
 //import { TestingModule, TestingModuleTwo } from '/testing/testingModule';
-import { LoggingModule } from '/lib/loggingModule';
+import { LoggingUtility } from './lib/loggingUtils';
 import { ServerUtilityModule } from './hacking/serverUtilityModule';
 import { HackingUtilityModule } from './hacking/hackingUtilityModule';
 import { HackingSchedulerModule } from './hacking/hackingSchedulerModule';
@@ -15,7 +15,7 @@ export async function main(ns: NS) {
     ns.disableLog('ALL');
 
     const modules: Record<string, BaseModule> = {};
-    modules['loggingModule'] = new LoggingModule(ns);
+    modules['loggingModule'] = new LoggingUtility(ns);
     modules['serverUtilityModule'] = new ServerUtilityModule(ns);
     modules['hackingUtilityModule'] = new HackingUtilityModule(
         ns,
@@ -33,7 +33,7 @@ export async function main(ns: NS) {
         modules['hackingUtilityModule'] as HackingUtilityModule,
         modules['gangModule'] as GangModule,
     ); //serverUtilityModule
-    (modules['loggingModule'] as LoggingModule).init(Object.values(modules));
+    (modules['loggingModule'] as LoggingUtility).init(Object.values(modules));
 
     const backgroundTasks = Object.values(modules).reduce(
         (tasks: BackgroundTask[], module: BaseModule) =>

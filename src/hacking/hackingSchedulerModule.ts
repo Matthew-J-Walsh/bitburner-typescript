@@ -10,10 +10,10 @@ import {
     ActiveScript,
 } from '/hacking/constants';
 import { ServerUtilityModule } from '/hacking/serverUtilityModule';
-import { BackgroundTask, PriorityTask } from '/lib/scheduler';
 import { RamTaskManager, FillerRamTask } from 'hacking/ramTaskManager';
 import { HackingRamTask } from '/hacking/hackingRamTask';
 import { RamUsageSubmodule } from '/hacking/ramUsageSubmodule';
+import { LoggingUtility } from '/lib/loggingUtils';
 
 /**
  * ### HackingSchedulerModule Uniqueness
@@ -22,6 +22,8 @@ import { RamUsageSubmodule } from '/hacking/ramUsageSubmodule';
 export class HackingSchedulerModule extends RamUsageSubmodule {
     /** Subtasks that handle their own scheduling */
     taskList: Array<RamTaskManager> = [];
+    /** Logger */
+    logger!: LoggingUtility;
 
     constructor(
         protected ns: NS,
@@ -29,6 +31,12 @@ export class HackingSchedulerModule extends RamUsageSubmodule {
         protected hackingUtilityModule: HackingUtilityModule,
     ) {
         super(ns, serverUtilityModule);
+
+        this.logger = new LoggingUtility(
+            ns,
+            'hackingSchedluer',
+            this.log.bind(this),
+        );
 
         this.taskList = [
             new HackingRamTask(

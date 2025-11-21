@@ -9,6 +9,7 @@ import {
 import { MoneyEvaluator, ExpEvaluator } from '/hacking/hackingEvaluator';
 import { HackingUtilityHelpers } from '/hacking/hackingUtilityHelpers';
 import { PurchaseEvaluation } from '/core/money/moneyModule';
+import { LoggingUtility } from '/lib/loggingUtils';
 
 /**
  * ### HackingUtilityModule Uniqueness
@@ -22,12 +23,20 @@ export class HackingUtilityModule {
     /** Amount of RAM to do sharing with */
     shareRam: number = 0;
     //stockEvaulation?: HackingEvaulation
+    /** Logger */
+    public logger!: LoggingUtility;
 
     constructor(
         protected ns: NS,
         /** ServerUtilityModule instance */
         protected serverUtilityModule: ServerUtilityModule,
     ) {
+        this.logger = new LoggingUtility(
+            ns,
+            'hackingUtility',
+            this.log.bind(this),
+        );
+
         this.moneyEvaluation = new MoneyEvaluator(
             this.ns,
             this.serverUtilityModule,

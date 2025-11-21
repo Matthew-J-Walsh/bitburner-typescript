@@ -33,27 +33,50 @@ export async function main(ns: NS) {
     }[] = [
         {
             nextRun: 0,
-            fn: serverUtilityModule.rootServers,
+            fn: serverUtilityModule.rootServers.bind(serverUtilityModule),
         },
         {
             nextRun: 0,
-            fn: serverUtilityModule.refreshTargetable,
+            fn: serverUtilityModule.refreshTargetable.bind(serverUtilityModule),
         },
         {
             nextRun: 0,
-            fn: hackingUtilityModule.moneyUpdate,
+            fn: () => {
+                serverUtilityModule.logger.logToFile();
+                return Date.now() + 120_000;
+            },
         },
         {
             nextRun: 0,
-            fn: hackingUtilityModule.expUpdate,
+            fn: hackingUtilityModule.moneyUpdate.bind(hackingUtilityModule),
         },
         {
             nextRun: 0,
-            fn: hackingUtilityModule.decideRamProportioning,
+            fn: hackingUtilityModule.expUpdate.bind(hackingUtilityModule),
         },
         {
             nextRun: 0,
-            fn: hackingSchedulerModule.update,
+            fn: hackingUtilityModule.decideRamProportioning.bind(
+                hackingUtilityModule,
+            ),
+        },
+        {
+            nextRun: 0,
+            fn: () => {
+                hackingUtilityModule.logger.logToFile();
+                return Date.now() + 120_000;
+            },
+        },
+        {
+            nextRun: 0,
+            fn: hackingSchedulerModule.update.bind(hackingSchedulerModule),
+        },
+        {
+            nextRun: 0,
+            fn: () => {
+                hackingSchedulerModule.logger.logToFile();
+                return Date.now() + 120_000;
+            },
         },
     ];
 

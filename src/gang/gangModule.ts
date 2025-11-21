@@ -2,12 +2,17 @@ import { GangMemberInfo, NS } from '@ns';
 import { GangUtilityFunctions } from './gangUtilityModule';
 import { randomString } from '/gang/constants';
 import { PurchaseEvaluation } from '/core/money/moneyModule';
+import { LoggingUtility } from '/lib/loggingUtils';
 
 /**
  * ### GangModule Uniqueness
  * This modules handles the full managment of the gang
  */
 export class GangModule {
+    /** When to trigger the next log */
+    nextLog: number = 0;
+    /** Logger */
+    logger!: LoggingUtility;
     /** Log storage */
     logInfo: Record<string, any> = {};
     /** Estimated amount of respect gained, needed because no singularity to check repuation */
@@ -16,6 +21,7 @@ export class GangModule {
     resMem: number = 0;
 
     constructor(protected ns: NS) {
+        this.logger = new LoggingUtility(ns, 'gang', this.log.bind(this));
         if (!this.ns.gang.inGang()) this.ns.gang.createGang('Slum Snakes');
         if (this.ns.gang.inGang()) {
             this.resMem = this.ns.gang.getGangInformation().respect;
@@ -131,23 +137,7 @@ export class GangModule {
                 bestTask: bestTask,
             };
         });
-        //this.ns.tprint(`Took ${Date.now() - startTime}ms to process gang`);
-        //this.ns.tprint(
-        //    `${JSON.stringify(GangUtilityFunctions.calculateAscensionDeltas(gangMembers[0]))}`,
-        //);
-        //this.ns.tprint(
-        //    `${JSON.stringify(GangUtilityFunctions.calculateSkillDeltas(gangMembers[4]))}`,
-        //);
-        //this.ns.tprint(
-        //    0.3 / (gangInfo.respectForNextRecruit - gangInfo.respect),
-        //);
-        //this.ns.tprint(-1 / (gangInfo.respect + gangInfo.wantedLevel + 100));
-        /** this.ns.tprint(
-            GangUtilityFunctions.getPowerGain(
-                gangMembers[0],
-                this.ns.gang.getTaskStats('Territory Warfare'),
-            ),
-        );*/
+
         if (
             Math.max(
                 ...Object.values(otherGangInfo).map((info) => info.power),
@@ -159,6 +149,11 @@ export class GangModule {
                     'We are dominating! Turning on territory warfare',
                 );
             this.ns.gang.setTerritoryWarfare(true);
+        }
+
+        if (Date.now() > this.nextLog) {
+            this.logger.logToFile();
+            this.nextLog = Date.now() + 120_000;
         }
     }
 
@@ -240,7 +235,7 @@ export class GangModule {
 
     /** Temporary before singularity: how much respect to obtain */
     private get respectRemaining(): number {
-        const target = 1e6; //2.5e6 is red pill
+        const target = 0.5e6; //2.5e6 is red pill
         const favor = 0;
 
         return target * (100 / (100 + favor)) * 1.1 * 75 - this.resEstimate;
