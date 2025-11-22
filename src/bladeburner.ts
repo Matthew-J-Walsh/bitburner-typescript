@@ -16,6 +16,6 @@ export async function main(ns: NS) {
 
     while (true) {
         bladeburnerModule.manage();
-        await ns.bladeburner.nextUpdate();
+        await bladeburnerModule.nextUpdate();
     }
 }
