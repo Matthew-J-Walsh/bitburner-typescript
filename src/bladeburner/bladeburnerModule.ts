@@ -247,8 +247,10 @@ export class BladeburnerModule {
                     return getValue(0.9, 0.04);
                 return getValue(0.3, 0.04);
             case 'Overclock':
-                if (level > 90) return 0;
-                return (1 - level * 0.01) / (1 - (level + 1) * 0.01) - 1;
+                if (level > 89) return 0;
+                return (
+                    ((1 - level * 0.01) / (1 - (level + 1) * 0.01) - 1) / cost
+                );
             case 'Reaper':
                 return getValue(1.0, 0.02);
             case 'Evasive System':
@@ -258,8 +260,7 @@ export class BladeburnerModule {
                     return getValue(0.8, 0.04);
                 return getValue(0.2, 0.05);
             case "Cyber's Edge":
-                if (this.ns.bladeburner.getRank() < 1e3) return 0;
-                return getValue(0.2, 0.02); //TODO come back to me, im stamina
+                return getValue(1.0, 0.02); //TODO come back to me, im stamina
             case 'Hands of Midas':
                 return getValue(0.05, 0.04);
             case 'Hyperdrive':

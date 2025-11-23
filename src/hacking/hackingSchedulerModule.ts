@@ -34,7 +34,7 @@ export class HackingSchedulerModule extends RamUsageSubmodule {
 
         this.logger = new LoggingUtility(
             ns,
-            'hackingSchedluer',
+            'hackingScheduler',
             this.log.bind(this),
         );
 
