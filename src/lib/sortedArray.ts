@@ -104,13 +104,14 @@ export class SortedArray<K, T> {
 
     /**
      * Find the smallest item whose numeric value is greater than or equal to
-     * the provided `after` value.
+     * the provided `after` value. Then give the one skip later
      * @param after Numeric value to compare against
+     * @param skip How many indicies to skip after that
      * @returns The smallest item with value >= after, or undefined if none
      */
-    findNext(after: number): T | undefined {
+    findNext(after: number, skip = 0): T | undefined {
         const idx = this.lowerBoundValue(after);
-        return this.arr[idx];
+        return this.arr[idx + skip];
     }
 
     /**

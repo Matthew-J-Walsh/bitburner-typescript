@@ -46,7 +46,10 @@ export class BladeburnerModule {
                     this.ns.tprint(
                         `Somehow returned early!? ${totalTime} ${currentTime} ${JSON.stringify(currentAction)}`,
                     );
-                this.nextUpdateTime = Date.now() + totalTime - currentTime;
+                if (this.ns.bladeburner.getBonusTime() > 0)
+                    this.nextUpdateTime =
+                        Date.now() + (totalTime - currentTime) / 5;
+                else this.nextUpdateTime = Date.now() + totalTime - currentTime;
                 return;
             }
         }
@@ -82,7 +85,7 @@ export class BladeburnerModule {
 
         // 2. Do black op if its 100%
         const blackOp = this.ns.bladeburner.getNextBlackOp()!;
-        if (blackOp.rank > this.ns.bladeburner.getRank())
+        if (blackOp.rank < this.ns.bladeburner.getRank())
             if (
                 this.attemptToStartStochasticAction(
                     'Black Operations',
@@ -145,8 +148,9 @@ export class BladeburnerModule {
             if (this.cityDirections.get(city as CityName)! !== 0)
                 return this.startFieldAnalysis(city as CityName);
 
-        // 10. Training
-        return this.startAction('General', 'Training');
+        // 10. Spam field analysis on a random city
+        let city = Cities[Math.floor(Math.random() * Cities.length)];
+        return this.startFieldAnalysis(city as CityName);
     }
 
     /**
@@ -164,6 +168,8 @@ export class BladeburnerModule {
             | 'Black Operations',
         name: BladeburnerActionName,
     ): boolean {
+        if (this.ns.bladeburner.getActionCountRemaining(type, name) < 1)
+            return false;
         if (type === 'Contracts' || type === 'Operations') {
             this.ns.bladeburner.setActionLevel(
                 type,
@@ -175,13 +181,16 @@ export class BladeburnerModule {
         for (let city of Cities) {
             this.ns.bladeburner.switchCity(city as CityName);
             if (
-                this.ns.bladeburner.getActionEstimatedSuccessChance(
-                    type,
-                    name,
-                )[0] === 1
-            ) {
-                return this.startAction(type, name);
-            }
+                name !== 'Raid' ||
+                this.ns.bladeburner.getCityCommunities(city as CityName) >= 1
+            )
+                if (
+                    this.ns.bladeburner.getActionEstimatedSuccessChance(
+                        type,
+                        name,
+                    )[0] >= 1
+                )
+                    return this.startAction(type, name);
         }
 
         return false;
@@ -245,11 +254,12 @@ export class BladeburnerModule {
             case 'Tracer':
                 if (this.ns.bladeburner.getRank() < 1e3)
                     return getValue(0.9, 0.04);
-                return getValue(0.3, 0.04);
+                return getValue(0.1, 0.04);
             case 'Overclock':
                 if (level > 89) return 0;
                 return (
-                    ((1 - level * 0.01) / (1 - (level + 1) * 0.01) - 1) / cost
+                    (1 * ((1 - level * 0.01) / (1 - (level + 1) * 0.01) - 1)) /
+                    cost
                 );
             case 'Reaper':
                 return getValue(1.0, 0.02);
@@ -257,12 +267,12 @@ export class BladeburnerModule {
                 return getValue(0.5, 0.04);
             case 'Datamancer':
                 if (this.ns.bladeburner.getRank() < 5e3)
-                    return getValue(0.8, 0.04);
-                return getValue(0.2, 0.05);
+                    return getValue(0.3, 0.04);
+                return getValue(0.05, 0.05);
             case "Cyber's Edge":
-                return getValue(1.0, 0.02); //TODO come back to me, im stamina
+                return getValue(0.1, 0.02); //TODO come back to me, im stamina
             case 'Hands of Midas':
-                return getValue(0.05, 0.04);
+                return getValue(0.005, 0.04);
             case 'Hyperdrive':
                 return getValue(0.1, 0.1);
             default:
@@ -280,13 +290,14 @@ export class BladeburnerModule {
         name: BladeburnerActionName | `${BladeburnerActionName}`,
     ): boolean {
         const currentAction = this.ns.bladeburner.getCurrentAction();
-        const time = this.ns.bladeburner.getActionTime(type, name);
+        let time = this.ns.bladeburner.getActionTime(type, name);
         const success =
             !currentAction ||
             currentAction.type !== type ||
             currentAction.name !== name
                 ? this.ns.bladeburner.startAction(type, name)
                 : true;
+        if (this.ns.bladeburner.getBonusTime() > 0) time /= 5;
         if (!success) this.ns.tprint(`Failed to start ${type}: ${name}`);
         else {
             this.nextUpdateTime = Date.now() + time + 1;

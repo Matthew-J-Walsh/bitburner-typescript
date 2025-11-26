@@ -2,6 +2,7 @@ import { NS, Server } from '@ns';
 import { Heap } from '/lib/heap';
 import { purchasedServerPrefix, scriptMapping } from '/hacking/constants';
 import { LoggingUtility } from '/lib/loggingUtils';
+import { QueueManagementModule } from './queueManagementModule';
 
 type PurchasedServer = {
     hostname: string;
@@ -14,7 +15,7 @@ type PurchasedServer = {
  * It provides access to lists of servers that are possible hacking targets.
  * It provides aceces to lists of servers that can have their RAM utilized.
  */
-export class ServerUtilityModule {
+export class ServerUtilityModule extends QueueManagementModule {
     /** Full map of servers */
     public servers: Map<string, Server> = new Map<string, Server>();
     /** Map of servers that we have admin of */
@@ -38,10 +39,8 @@ export class ServerUtilityModule {
     /** Logger */
     public logger!: LoggingUtility;
 
-    constructor(
-        protected ns: NS,
-        otherScripts: string[],
-    ) {
+    constructor(protected ns: NS) {
+        super();
         this.crackers = [
             { file: 'BruteSSH.exe', fn: this.ns.brutessh.bind(this.ns) },
             { file: 'FTPCrack.exe', fn: this.ns.ftpcrack.bind(this.ns) },
@@ -49,15 +48,15 @@ export class ServerUtilityModule {
             { file: 'HTTPWorm.exe', fn: this.ns.httpworm.bind(this.ns) },
             { file: 'SQLInject.exe', fn: this.ns.sqlinject.bind(this.ns) },
         ];
-        this.logger = new LoggingUtility(
-            ns,
-            'serverUtility',
-            this.log.bind(this),
-        );
         this.fullServerScan();
-        this.rootServers();
-        this.refreshTargetable();
-        this.startScripts(otherScripts);
+    }
+
+    public initialQueue(): void {
+        super.initialQueue();
+        this.enqueue({
+            time: Date.now() + 300_000,
+            fn: this.rootServers.bind(this),
+        });
     }
 
     /** Scans all servers, refreshing the server record */
@@ -88,7 +87,6 @@ export class ServerUtilityModule {
             } else {
                 this.ourServers.set(servername, server);
                 this.ourHostnames.push(servername);
-                this.placeScriptsOnServer(server);
             }
             if (
                 server.hackDifficulty != null &&
@@ -111,24 +109,8 @@ export class ServerUtilityModule {
         }
     }
 
-    /**
-     * Starts some scripts when this module loads
-     * @param scriptsToFire list of scripts to run
-     */
-    startScripts(scriptsToFire: string[]): void {
-        const thisScript = this.ns.getRunningScript()!;
-        const hostname = thisScript.server;
-        scriptsToFire.forEach((script) => this.ns.exec(script, hostname));
-        this.reservedRam =
-            thisScript.ramUsage +
-            scriptsToFire.reduce(
-                (ramUsage, script) => ramUsage + this.ns.getScriptRam(script),
-                0,
-            );
-    }
-
     /** Tries to root more servers */
-    rootServers(): number {
+    rootServers(): void {
         const crackers = this.crackers.filter((cracker) =>
             this.ns.fileExists(cracker.file, 'home'),
         );
@@ -140,7 +122,6 @@ export class ServerUtilityModule {
                     if (this.ns.nuke(server.hostname)) {
                         this.ourServers.set(server.hostname, server);
                         this.ourHostnames.push(server.hostname);
-                        this.placeScriptsOnServer(server);
                         return false;
                     } else {
                         this.ns.tprint(
@@ -152,11 +133,14 @@ export class ServerUtilityModule {
             },
         );
 
-        return Date.now() + 300_000;
+        this.enqueue({
+            time: Date.now() + 300_000,
+            fn: this.rootServers.bind(this),
+        });
     }
 
     /** Refreshes targetable server list */
-    refreshTargetable(): number {
+    refreshTargetable(): void {
         const currentHackingLevel = this.ns.getHackingLevel();
 
         this.futureTargetableServers = this.futureTargetableServers.filter(
@@ -172,8 +156,6 @@ export class ServerUtilityModule {
                 }
             },
         );
-
-        return Date.now() + 300_000;
     }
 
     /** Buys the least expensive RAM */
@@ -261,17 +243,6 @@ export class ServerUtilityModule {
     }
 
     //get maximumServerRam()
-
-    /**
-     * Places scripts on a server to be run later
-     * @param server Server
-     */
-    private placeScriptsOnServer(server: Server) {
-        const scripts = Object.values(scriptMapping);
-        scripts.forEach((script) => {
-            this.ns.scp(script, server.hostname);
-        });
-    }
 
     /**
      * Updates a server information

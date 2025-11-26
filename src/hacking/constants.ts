@@ -1,9 +1,14 @@
 import { Server } from '@ns';
 
-//TODO:
 export type Time = number;
 export type ProcessID = number;
 export type Threads = number;
+
+export type ScriptPortCommunication = {
+    script: string;
+    expectedDuration: number;
+    responsePort?: number;
+};
 
 /** Prefix for purchased servers */
 export const purchasedServerPrefix = 'pserv';
@@ -34,13 +39,21 @@ export const scriptMapping = {
     share: 'scripts/shareScript.js',
     stanek: 'scripts/stanekScript.js',
 };
-export const coreEffectedScripts: ScriptType[] = ['grow', 'weaken'];
+export const coreEffectedScripts: string[] = [
+    scriptMapping['grow'],
+    scriptMapping['weaken'],
+];
 /** Type for strings related to hacking scripts */
-export type HackScriptType = 'hack' | 'grow' | 'weaken';
+export type HackScriptType = 'hack' | 'hackF' | 'grow' | 'weaken';
+//hackF is a fracturable hack (exp farming)
 /** Iterable for possible HackScriptTypes */
 export const hackScriptTypes = ['hack', 'grow', 'weaken'] as HackScriptType[];
 export type LoopedScriptType = 'weakenLooped' | 'share' | 'stanek';
-export type HackScriptRuntimes = { hack: Time; grow: Time; weaken: Time };
+export interface HackScriptRuntimes {
+    hack: Time;
+    grow: Time;
+    weaken: Time;
+}
 
 export type HackingPolicy = {
     /** Home for do nothing */
@@ -66,10 +79,10 @@ export const hwgwStructure: HackScriptType[] = [
 export const hwStructure: HackScriptType[] = ['hack', 'weaken'];
 
 /** Struct for a combined hacking script and its thread count */
-export type HackingScript = {
+export interface HackingScript {
     script: HackScriptType;
     threads: Threads;
-};
+}
 
 export const hackScriptSize = 1.7;
 export const growScriptSize = 1.75;
@@ -83,6 +96,7 @@ export const growAvgCost =
     growScriptSize + (weakenScriptSize * growFort) / weakenFort;
 export const scriptCosts = {
     hack: 1.7,
+    hackF: 1.7,
     grow: 1.75,
     weaken: 1.75,
 };

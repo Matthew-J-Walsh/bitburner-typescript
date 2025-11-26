@@ -243,7 +243,7 @@ export class GangModule {
 
     /** Temporary before singularity: how much money to obtain */
     private get moneyRemaining(): number {
-        return this.ns.getPlayer().money * 2 + 1e10;
+        return this.ns.getPlayer().money * 1.1 + 1e9;
     }
 
     public log(): Record<string, any> {
