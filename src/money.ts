@@ -9,7 +9,7 @@ import { StockModule } from './money/stockModule';
 export async function main(ns: NS) {
     ns.disableLog('ALL');
 
-    const stockModule = new StockModule(ns);
+    const stockModule = new StockModule(ns, () => Infinity);
 
     while (true) {
         stockModule.manage();
