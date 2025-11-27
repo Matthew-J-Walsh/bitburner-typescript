@@ -23,6 +23,8 @@ export class BladeburnerModule {
     lastFieldAnalysisEst: number | undefined = undefined;
     /** Next action completion time */
     nextUpdateTime: number = 0;
+    /** Next action completion time for sleeves */
+    sleeveNextUpdateTime: Record<number, number> = {};
 
     constructor(protected ns: NS) {
         this.logger = new LoggingUtility(
@@ -33,6 +35,8 @@ export class BladeburnerModule {
     }
 
     manage(): any {
+        if (this.nextUpdateTime > Date.now()) return;
+
         const currentAction = this.ns.bladeburner.getCurrentAction();
 
         if (currentAction) {
@@ -196,12 +200,12 @@ export class BladeburnerModule {
         return false;
     }
 
-    public async nextUpdate(): Promise<any> {
-        const now = Date.now();
-        if (this.nextUpdateTime > now)
-            return this.ns.sleep(this.nextUpdateTime - now);
-        else return this.ns.bladeburner.nextUpdate();
-    }
+    //public async nextUpdate(): Promise<any> {
+    //    const now = Date.now();
+    //    if (this.nextUpdateTime > now)
+    //        return this.ns.sleep(this.nextUpdateTime - now);
+    //    else return this.ns.bladeburner.nextUpdate();
+    //}
 
     /**
      * Starts field analysis targeting a city and tracking the estimate direction
@@ -257,6 +261,7 @@ export class BladeburnerModule {
                 return getValue(0.1, 0.04);
             case 'Overclock':
                 if (level > 89) return 0;
+                if (level > 49) return 1; // This is the critical point for Overclock
                 return (
                     (1 * ((1 - level * 0.01) / (1 - (level + 1) * 0.01) - 1)) /
                     cost
@@ -307,6 +312,80 @@ export class BladeburnerModule {
         }
 
         return success;
+    }
+
+    manage_sleeves() {
+        const requiredInfilSleeves = 2;
+
+        for (let i = 0; i < this.ns.sleeve.getNumSleeves(); i++) {
+            if (!this.sleeveNextUpdateTime[i]) {
+                this.sleeveNextUpdateTime[i] = 0;
+            }
+
+            if (this.sleeveNextUpdateTime[i] > Date.now()) continue;
+
+            const task = this.ns.sleeve.getTask(i);
+
+            // Don't stop if we are mid task somehow
+            if (
+                task !== null &&
+                task.type === 'BLADEBURNER' &&
+                task.cyclesWorked > 10
+            )
+                continue;
+
+            // 1. Infiltrate if needed
+            if (i < requiredInfilSleeves) {
+                this.ns.sleeve.setToBladeburnerAction(
+                    i,
+                    'Infiltrate Synthoids',
+                );
+                this.sleeveNextUpdateTime[i] = Date.now() + 10_000;
+                continue;
+            }
+
+            // 2. Farm stamina if not maxed
+            const [stamina, maxStamina] = this.ns.bladeburner.getStamina();
+            if (stamina / maxStamina < 0.95) {
+                this.ns.sleeve.setToBladeburnerAction(
+                    i,
+                    'Hyperbolic Regeneration Chamber',
+                );
+                this.sleeveNextUpdateTime[i] = Date.now() + 60;
+                continue;
+            }
+
+            // 3. Farm Charisma if low
+            const sleeve = this.ns.sleeve.getSleeve(i);
+            if (sleeve.exp.charisma / sleeve.mults.charisma_exp < 4e6) {
+                this.ns.sleeve.setToBladeburnerAction(i, 'Recruitment');
+                this.sleeveNextUpdateTime[i] = Date.now() + 100;
+                continue;
+            }
+
+            // 4. Decreese chaos if high
+            if (
+                this.ns.bladeburner.getCityChaos(
+                    this.ns.bladeburner.getCity(),
+                ) > 40
+            ) {
+                this.ns.sleeve.setToBladeburnerAction(i, 'Diplomacy');
+                this.sleeveNextUpdateTime[i] = Date.now() + 60;
+                continue;
+            }
+
+            // 5. Do field analysis if we aren't completely outranking it
+            if (this.ns.bladeburner.getRank() < 1e4) {
+                this.ns.sleeve.setToBladeburnerAction(i, 'Field Analysis');
+                this.sleeveNextUpdateTime[i] = Date.now() + 30;
+                continue;
+            }
+
+            // 6. Just get more operations
+            this.ns.sleeve.setToBladeburnerAction(i, 'Infiltrate Synthoids');
+            this.sleeveNextUpdateTime[i] = Date.now() + 60;
+            continue;
+        }
     }
 
     log(): Record<string, any> {
