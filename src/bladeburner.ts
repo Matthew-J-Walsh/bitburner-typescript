@@ -16,6 +16,7 @@ export async function main(ns: NS) {
 
     while (true) {
         bladeburnerModule.manage();
+        bladeburnerModule.manage_sleeves();
         await ns.bladeburner.nextUpdate();
     }
 }

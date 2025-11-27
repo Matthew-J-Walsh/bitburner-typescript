@@ -1,6 +1,8 @@
 import {
     BladeburnerActionName,
     BladeburnerActionType,
+    BladeburnerActionTypeForSleeve,
+    BladeburnerContractName,
     BladeburnerSkillName,
     CityName,
     NS,
@@ -50,10 +52,11 @@ export class BladeburnerModule {
                     this.ns.tprint(
                         `Somehow returned early!? ${totalTime} ${currentTime} ${JSON.stringify(currentAction)}`,
                     );
-                if (this.ns.bladeburner.getBonusTime() > 0)
+                if (this.ns.bladeburner.getBonusTime() > 1000) {
                     this.nextUpdateTime =
                         Date.now() + (totalTime - currentTime) / 5;
-                else this.nextUpdateTime = Date.now() + totalTime - currentTime;
+                } else
+                    this.nextUpdateTime = Date.now() + totalTime - currentTime;
                 return;
             }
         }
@@ -263,7 +266,7 @@ export class BladeburnerModule {
                 if (level > 89) return 0;
                 if (level > 49) return 1; // This is the critical point for Overclock
                 return (
-                    (1 * ((1 - level * 0.01) / (1 - (level + 1) * 0.01) - 1)) /
+                    (10 * ((1 - level * 0.01) / (1 - (level + 1) * 0.01) - 1)) /
                     cost
                 );
             case 'Reaper':
@@ -302,7 +305,7 @@ export class BladeburnerModule {
             currentAction.name !== name
                 ? this.ns.bladeburner.startAction(type, name)
                 : true;
-        if (this.ns.bladeburner.getBonusTime() > 0) time /= 5;
+        if (this.ns.bladeburner.getBonusTime() > 1000) time /= 5;
         if (!success) this.ns.tprint(`Failed to start ${type}: ${name}`);
         else {
             this.nextUpdateTime = Date.now() + time + 1;
@@ -330,36 +333,31 @@ export class BladeburnerModule {
             if (
                 task !== null &&
                 task.type === 'BLADEBURNER' &&
-                task.cyclesWorked > 10
+                task.cyclesWorked > 3
             )
                 continue;
 
             // 1. Infiltrate if needed
             if (i < requiredInfilSleeves) {
-                this.ns.sleeve.setToBladeburnerAction(
-                    i,
-                    'Infiltrate Synthoids',
-                );
-                this.sleeveNextUpdateTime[i] = Date.now() + 10_000;
+                this.start_sleeve_action(i, 10_000, 'Infiltrate Synthoids');
                 continue;
             }
 
             // 2. Farm stamina if not maxed
             const [stamina, maxStamina] = this.ns.bladeburner.getStamina();
             if (stamina / maxStamina < 0.95) {
-                this.ns.sleeve.setToBladeburnerAction(
+                this.start_sleeve_action(
                     i,
+                    60_000,
                     'Hyperbolic Regeneration Chamber',
                 );
-                this.sleeveNextUpdateTime[i] = Date.now() + 60;
                 continue;
             }
 
             // 3. Farm Charisma if low
             const sleeve = this.ns.sleeve.getSleeve(i);
             if (sleeve.exp.charisma / sleeve.mults.charisma_exp < 4e6) {
-                this.ns.sleeve.setToBladeburnerAction(i, 'Recruitment');
-                this.sleeveNextUpdateTime[i] = Date.now() + 100;
+                this.start_sleeve_action(i, 100_000, 'Recruitment');
                 continue;
             }
 
@@ -369,23 +367,61 @@ export class BladeburnerModule {
                     this.ns.bladeburner.getCity(),
                 ) > 40
             ) {
-                this.ns.sleeve.setToBladeburnerAction(i, 'Diplomacy');
-                this.sleeveNextUpdateTime[i] = Date.now() + 60;
+                this.start_sleeve_action(i, 60_000, 'Diplomacy');
                 continue;
             }
 
             // 5. Do field analysis if we aren't completely outranking it
             if (this.ns.bladeburner.getRank() < 1e4) {
-                this.ns.sleeve.setToBladeburnerAction(i, 'Field Analysis');
-                this.sleeveNextUpdateTime[i] = Date.now() + 30;
+                this.start_sleeve_action(i, 30_000, 'Field Analysis');
                 continue;
             }
 
             // 6. Just get more operations
-            this.ns.sleeve.setToBladeburnerAction(i, 'Infiltrate Synthoids');
-            this.sleeveNextUpdateTime[i] = Date.now() + 60;
+            this.start_sleeve_action(i, 60_000, 'Infiltrate Synthoids');
             continue;
         }
+    }
+
+    start_sleeve_action(
+        sleeveIdx: number,
+        expected_time: number,
+        action:
+            | 'Training'
+            | 'Field Analysis'
+            | 'Recruitment'
+            | 'Diplomacy'
+            | 'Hyperbolic Regeneration Chamber'
+            | BladeburnerActionTypeForSleeve
+            | 'Infiltrate Synthoids'
+            | 'Support main sleeve'
+            | 'Take on contracts',
+        contract?: BladeburnerContractName,
+    ) {
+        const currentTask = this.ns.sleeve.getTask(sleeveIdx);
+        this.sleeveNextUpdateTime[sleeveIdx] = Date.now() + expected_time;
+        if (
+            currentTask &&
+            currentTask.type === 'INFILTRATE' &&
+            action === 'Infiltrate Synthoids'
+        )
+            return;
+        if (
+            currentTask &&
+            currentTask.type === 'SUPPORT' &&
+            action === 'Support main sleeve'
+        )
+            return;
+        if (
+            currentTask &&
+            currentTask.type === 'BLADEBURNER' &&
+            currentTask.actionType === 'Contracts' &&
+            currentTask.actionName === contract
+        )
+            return;
+        //this.ns.tprint('starting action on sleeve');
+        //this.ns.tprint(`${JSON.stringify(currentTask)}`);
+        this.ns.sleeve.setToBladeburnerAction(sleeveIdx, action, contract);
     }
 
     log(): Record<string, any> {
