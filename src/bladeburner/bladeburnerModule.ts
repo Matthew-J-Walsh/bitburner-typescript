@@ -354,9 +354,18 @@ export class BladeburnerModule {
                 continue;
             }
 
-            // 3. Farm Charisma if low
+            // 3-.5. Reduce shock
             const sleeve = this.ns.sleeve.getSleeve(i);
-            if (sleeve.exp.charisma / sleeve.mults.charisma_exp < 4e6) {
+            if (sleeve.shock > 0.5) {
+                const currentTask = this.ns.sleeve.getTask(i);
+                this.sleeveNextUpdateTime[i] = Date.now() + 60_000;
+                if (!currentTask || currentTask.type !== 'RECOVERY')
+                    this.ns.sleeve.setToShockRecovery(i);
+                continue;
+            }
+
+            // 3. Farm Charisma if low
+            if (sleeve.exp.charisma / sleeve.mults.charisma_exp < 6e6) {
                 this.start_sleeve_action(i, 100_000, 'Recruitment');
                 continue;
             }

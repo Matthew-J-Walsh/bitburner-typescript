@@ -4,45 +4,53 @@ import {
     growAvgCost,
     growScriptSize,
     hackAvgCost,
+    hackScriptGap,
     HackScriptType,
     maximumHackedPercent,
     minimumAllowableBatchRam,
     ProcessID,
     scriptCosts,
+    scriptExpectedDelay,
     scriptMapping,
+    targetedTimeVariance,
     Threads,
     Time,
     weakenScriptSize,
 } from '/hacking/constants';
-import { IntervalTimeline } from '/lib/timeline';
-import { QueuedHackCall } from './hackingModule';
-import { HackingBatch } from './hackingBatches';
 import { lambertWApprox } from '/lib/math/lambertW';
+import { QueuedCall } from './queueManagementModule';
 
-interface TargetState {
-    money: number;
-    security: number;
+function getScriptTime(ns: NS, script: HackScriptType, hostname: string): Time {
+    switch (script) {
+        case 'hack':
+        case 'hackF':
+            return ns.getHackTime(hostname);
+        case 'grow':
+            return ns.getGrowTime(hostname);
+        case 'weaken':
+            return ns.getWeakenTime(hostname);
+        default:
+            throw new Error('getScriptTime');
+    }
 }
-
-//Amount of time off a leveling unaffected script can hit, before or after, we need to add in
-export const targetedTimeVariance: Time = 100;
-//Amount of time between hack windows that we need so that we can actually start runs
-export const hackScriptGap: Time = 50;
 
 export class TargetableServer {
     /** Server object */
     public server: Server;
-    /** Timeline of the state of the server */
-    private timeline!: IntervalTimeline<TargetState>;
+    /** Safe points */
+    public safePoints: Array<Time> = [];
+    /** debugging */
+    public lastType: string = 'weaken';
 
     constructor(
         readonly ns: NS,
         hostname: string,
-        private readonly queue: (call: QueuedHackCall) => void,
+        private readonly queue: (call: QueuedCall) => void,
         private readonly exec: (
             script: string,
             threads: Threads,
             fracturable: boolean,
+            target: string,
             currentTime: Time,
             startTime: Time,
             endTime: Time,
@@ -50,111 +58,12 @@ export class TargetableServer {
         private readonly kill: (pid: ProcessID) => void,
     ) {
         this.server = ns.getServer(hostname);
-        this.timeline = new IntervalTimeline<TargetState>({
-            money: this.server.moneyAvailable!,
-            security: this.server.hackDifficulty!,
-        });
     }
 
-    private cleanTimeline() {
-        this.timeline.pruneBefore();
-    }
-
-    private getCurrentState(): TargetState | undefined {
-        //we throw an error only if the next state
-        this.cleanTimeline();
-        const currentTime = Date.now();
-        const state = this.timeline.getGuaranteedState();
-        const server = this.ns.getServer();
-        if (
-            state &&
-            (state.security < server.hackDifficulty! ||
-                state.money > server.moneyAvailable!)
-        )
-            this.ns.tprint(`Out of state!!!`);
-
-        return state;
-    }
-
-    private getEndState(): [Time, TargetState] {
-        const state = this.timeline.intervals[-1].state;
-        const time = this.timeline.intervals[-1].startMax;
-        return [Math.max(time, Date.now()), state];
-    }
-
-    private nextMinSecurityTime(): Time {
-        let [nextTime, nextState] = this.timeline.nextGuaranteedState();
-        let [afterTime, afterState] = this.timeline.nextGuaranteedState(
-            nextTime + 1,
-        );
-        return nextState.security > afterState.security ? afterTime : nextTime;
-    }
-
-    private addSequenceToTimeline(
-        sequence: Array<[HackScriptType, Threads, Time]>,
-        paddingBefore: Time,
-        paddingAfter: Time,
-    ) {
-        let lastState = this.getEndState()[1];
-        for (let [script, threads, time] of sequence) {
-            lastState = this.stateTransition(lastState, script, threads);
-            this.timeline.addInterval(
-                time - paddingBefore,
-                time + paddingAfter,
-                lastState,
-            );
-        }
-    }
-
-    /**
-     * Calculates a state transtion due to a script running
-     * @param startState
-     * @param script
-     * @param threads
-     * @returns
-     */
-    private stateTransition(
-        startState: TargetState,
-        script: HackScriptType,
-        threads: Threads,
-    ): TargetState {
-        switch (script) {
-            case 'hack':
-            case 'hackF':
-                return {
-                    money:
-                        startState.money *
-                        (1 -
-                            threads *
-                                this.ns.hackAnalyze(this.server.hostname)),
-                    security: Math.min(
-                        100,
-                        startState.security +
-                            this.ns.hackAnalyzeSecurity(threads),
-                    ),
-                };
-            case 'grow':
-                return {
-                    money: this.ns.formulas.hacking.growAmount(
-                        this.server,
-                        this.ns.getPlayer(),
-                        threads,
-                    ),
-                    security: Math.min(
-                        100,
-                        startState.security +
-                            this.ns.growthAnalyzeSecurity(threads),
-                    ),
-                };
-            case 'weaken':
-                return {
-                    money: startState.money,
-                    security: Math.max(
-                        this.server.minDifficulty!,
-                        startState.security - this.ns.weakenAnalyze(threads),
-                    ),
-                };
-        }
+    public cleanSafePoints() {
+        const now = Date.now();
+        const index = this.safePoints.findIndex((time) => time > now);
+        this.safePoints = index === -1 ? [] : this.safePoints.slice(index);
     }
 
     public createSequence(
@@ -162,21 +71,38 @@ export class TargetableServer {
         ramAllocation: number,
         timePadding: Time,
     ): Array<[HackScriptType, Threads, Time]> {
-        const state = this.getEndState()[1];
-        let ramAllowed = ramAllocation / timePadding;
+        let ramAllowed =
+            (timePadding * ramAllocation) /
+            Math.max(this.ns.getWeakenTime(this.server.hostname), timePadding);
 
-        if (state.security > this.server.minDifficulty!)
+        if (
+            this.ns.getServerSecurityLevel(this.server.hostname) >
+            this.ns.getServerMinSecurityLevel(this.server.hostname)
+        ) {
+            if (this.lastType !== 'weaken')
+                this.ns.tprint(
+                    `lost security ${this.ns.getServerMinSecurityLevel(this.server.hostname)} -> ${this.ns.getServerSecurityLevel(this.server.hostname)}`,
+                );
+            this.lastType = 'weaken';
             return [
                 [
                     'weaken',
-                    Math.min(
-                        Math.floor(ramAllowed / weakenScriptSize),
-                        (state.security - this.server.minDifficulty!) /
-                            this.ns.weakenAnalyze(1),
+                    Math.ceil(
+                        Math.min(
+                            ramAllowed / weakenScriptSize,
+                            (this.ns.getServerSecurityLevel(
+                                this.server.hostname,
+                            ) -
+                                this.ns.getServerMinSecurityLevel(
+                                    this.server.hostname,
+                                )) /
+                                this.ns.weakenAnalyze(1),
+                        ),
                     ),
                     0,
                 ],
             ];
+        }
 
         if (type === 'exp') {
             ramAllowed *= 2;
@@ -189,13 +115,17 @@ export class TargetableServer {
                 (hackCount * this.ns.hackAnalyzeSecurity(1)) /
                     this.ns.weakenAnalyze(1),
             );
+            this.lastType = 'hack';
             return [
                 ['hackF', hackCount, 0],
                 ['weaken', weakenCount, timePadding],
             ];
         }
 
-        if (state.money < this.server.moneyMax!) {
+        if (
+            this.ns.getServerMoneyAvailable(this.server.hostname) <
+            this.ns.getServerMaxMoney(this.server.hostname)
+        ) {
             ramAllowed *= 2;
             let growCount = Math.floor(
                 ramAllowed /
@@ -207,19 +137,21 @@ export class TargetableServer {
                 (growCount * this.ns.growthAnalyzeSecurity(1)) /
                     this.ns.weakenAnalyze(1),
             );
+            if (this.lastType !== 'grow' && this.lastType !== 'weaken')
+                this.ns.tprint(
+                    `lost grow ${this.ns.getServerMaxMoney(this.server.hostname)} -> ${this.ns.getServerMoneyAvailable(this.server.hostname)}`,
+                );
+            this.lastType = 'grow';
             return [
                 ['grow', growCount, 0],
                 ['weaken', weakenCount, timePadding],
             ];
         }
 
+        this.lastType = 'hack';
         //hwgw
         ramAllowed *= 4;
-
-        const mockServer = structuredClone(this.server);
-        mockServer.hackDifficulty = state.security;
-        mockServer.moneyAvailable = state.money;
-        return hwgwGenerator(this.ns, mockServer, ramAllowed, timePadding);
+        return hwgwGenerator(this.ns, this.server, ramAllowed, timePadding);
     }
 
     /**
@@ -228,22 +160,17 @@ export class TargetableServer {
      * @param ramAllocation
      * @returns The time that we would next start a batch after this one
      */
-    public queueBatch(type: 'money' | 'exp', ramAllocation: number): Time {
-        this.getCurrentState(); // Just to throw errors and resolve if the state is somehow wrong
-
-        const [startTime, state] = this.getEndState();
-
-        const mockServer = structuredClone(this.server);
-        mockServer.hackDifficulty = state.security;
-
+    public startBatch(type: 'money' | 'exp', ramAllocation: number): Time {
+        const currentTime = Date.now();
         const paddingAfter = targetedTimeVariance;
-        const paddingBefore =
+        const paddingBefore = Math.ceil(
             paddingAfter +
-            this.ns.formulas.hacking.weakenTime(
-                mockServer,
-                this.ns.getPlayer(),
-            ) *
-                0.01;
+                this.ns.formulas.hacking.weakenTime(
+                    this.server,
+                    this.ns.getPlayer(),
+                ) *
+                    0.01,
+        );
 
         const sequence: Array<[HackScriptType, Threads, Time]> =
             this.createSequence(
@@ -252,29 +179,71 @@ export class TargetableServer {
                 paddingBefore + paddingAfter + hackScriptGap,
             );
         sequence.forEach(
-            (value, idx) => (sequence[idx][2] += startTime + paddingBefore),
+            (value, idx) =>
+                (sequence[idx][2] = Math.ceil(
+                    sequence[idx][2] +
+                        currentTime +
+                        this.ns.getWeakenTime(this.server.hostname) +
+                        scriptExpectedDelay,
+                )),
+        );
+        const firedScripts = sequence.map(([script, threads, endTime], idx) =>
+            this.fire(
+                script,
+                threads,
+                currentTime,
+                Math.ceil(
+                    endTime -
+                        getScriptTime(this.ns, script, this.server.hostname),
+                ),
+                endTime,
+            ),
         );
 
-        //It needs to be added to the timeline instantly
-        this.addSequenceToTimeline(sequence, paddingBefore, paddingAfter);
-
-        const batch = new HackingBatch(this.ns, this, sequence);
-        this.queue({
-            time: this.nextMinSecurityTime(),
-            fn: () => this.manage(batch),
-        });
-
-        return sequence[-1][2] + paddingAfter + hackScriptGap;
-    }
-
-    public manage(batch: HackingBatch) {
-        this.getCurrentState(); // Just to throw errors and resolve if the state is somehow wrong
-
-        let nextTime = this.nextMinSecurityTime();
-
-        if (!batch.manage(nextTime)) {
-            this.queue({ time: nextTime, fn: () => this.manage(batch) });
+        if (!firedScripts.every((scripts) => scripts)) {
+            this.ns.tprint(
+                `Not all scripts fired. Killing batch, RAM WARNING!`,
+            );
+            firedScripts.forEach((scripts) =>
+                scripts?.forEach((script) => this.kill(script.pid)),
+            );
         }
+
+        this.safePoints.push(sequence[sequence.length - 1][2] + paddingAfter);
+
+        /**this.ns.tprint(
+            `${Date.now()} Started batch with ${sequence}\nReturn: ${Math.ceil(
+                sequence[sequence.length - 1][2] +
+                    paddingAfter +
+                    hackScriptGap -
+                    this.ns.getWeakenTime(this.server.hostname),
+            )}`,
+        );*/
+        let nextCallDelay = Math.ceil(
+            sequence[sequence.length - 1][2] +
+                paddingBefore +
+                paddingAfter +
+                hackScriptGap -
+                this.ns.getWeakenTime(this.server.hostname) -
+                currentTime,
+        );
+
+        this.cleanSafePoints();
+        const nextSafePoint = this.safePoints[0] ?? Infinity;
+
+        nextCallDelay =
+            (nextSafePoint - currentTime) / 2 > nextCallDelay
+                ? nextCallDelay
+                : nextSafePoint - currentTime;
+
+        this.ns.write(
+            `logs/scripts/${this.server.hostname}ends.txt`,
+            `${Date.now()} Fire! ${sequence.length === 1 ? 'weaken' : sequence.length === 2 ? 'grow' : 'hack'} 
+            for ${sequence[0][2]} -> ${sequence[sequence.length - 1][2]}\n\tNext Fire: ${Date.now() + nextCallDelay}... safty: ${nextSafePoint}\n`,
+            'a',
+        );
+
+        return currentTime + nextCallDelay;
     }
 
     public fire(
@@ -291,6 +260,7 @@ export class TargetableServer {
             scriptMapping[script],
             threads,
             fracturable,
+            this.server.hostname,
             currentTime,
             startTime,
             endTime,
@@ -303,6 +273,11 @@ export class TargetableServer {
         const mockServer = structuredClone(this.server);
         mockServer.hackDifficulty = mockServer.minDifficulty;
         mockServer.moneyAvailable = mockServer.moneyMax;
+        if (
+            mockServer.hackDifficulty !== mockServer.minDifficulty ||
+            mockServer.moneyAvailable !== mockServer.moneyMax
+        )
+            throw new Error('????');
 
         const paddingAfter = targetedTimeVariance;
         const paddingBefore =
@@ -314,7 +289,12 @@ export class TargetableServer {
                 0.01;
         const timePadding = paddingBefore + paddingAfter + hackScriptGap;
 
-        let ramAllowed = ramAllocation / timePadding;
+        let ramAllowed =
+            (ramAllocation * timePadding) /
+            this.ns.formulas.hacking.weakenTime(
+                mockServer,
+                this.ns.getPlayer(),
+            );
 
         if (type === 'exp') {
             ramAllowed *= 2;
@@ -339,13 +319,15 @@ export class TargetableServer {
                 )
             );
         } else {
+            ramAllowed *= 4;
             // (type === 'money') {
             const seq = hwgwGenerator(
                 this.ns,
                 mockServer,
-                4 * ramAllowed,
+                ramAllowed,
                 timePadding,
             );
+            if (seq.length !== 4) return 0;
             return (
                 seq[0][1] *
                 mockServer.moneyMax! *

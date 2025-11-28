@@ -13,12 +13,6 @@ export type ScriptPortCommunication = {
 /** Prefix for purchased servers */
 export const purchasedServerPrefix = 'pserv';
 
-/** Minimal time allowed between experience batches targeting the same target per pair TODO */
-export const minimalTimeBetweenTwoScriptsEnding = 2000;
-/** Default delay for hacking priority returns */
-export const maxPeriodForHackingSchedulingFunctions = 5_000;
-/** Time to wait if we aren't at minimum security */
-export const backupSecurityFailureSchedulingDelay = 5;
 /** Maximum hacked percent for stability */
 export const maximumHackedPercent = 0.9;
 
@@ -128,3 +122,11 @@ export type Deadzone = {
     /** When the deadzone will end */
     end: Time;
 };
+//Amount of time off a leveling unaffected script can hit, before or after, we need to add in
+
+/** Time difference that we can expect when hitting hacks */
+export const targetedTimeVariance: Time = 50;
+/** Amount of time between hack windows that we need so that we can safely start runs */
+export const hackScriptGap: Time = 100;
+/** Delay at the start of a batch to get the scripts going */
+export const scriptExpectedDelay: Time = 50;

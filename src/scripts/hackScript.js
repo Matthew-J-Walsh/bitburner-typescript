@@ -1,8 +1,16 @@
 /** @param {NS} ns **/
 export async function main(ns) {
     const target = ns.args[0];
-    const delay = ns.args[1];
-    const endTime = ns.args[2];
+    const triggerTime = ns.args[1];
+    const startTime = ns.args[2];
+    const endTime = ns.args[3];
+    let delay = Math.floor(startTime - Date.now());
+    if (delay < 0) {
+        ns.tprint(
+            `Negative delay ${triggerTime}, ${Date.now()}, ${startTime}, ${endTime}`,
+        );
+        delay = 0;
+    }
     //ns.tprint(
     //    `Starting a hack toward ${target} at time ${Date.now()} with delay ${delay} to end after time ${endTime}`,
     //);
@@ -10,7 +18,7 @@ export async function main(ns) {
     const trueEnd = Date.now();
     ns.write(
         `logs/scripts/${target}ends.txt`,
-        `hack ${trueEnd - endTime}\n`,
+        `${Date.now()} hack ${trueEnd - endTime}\n`,
         'a',
     );
     //ns.tprint(

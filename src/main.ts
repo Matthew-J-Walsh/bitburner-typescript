@@ -1,7 +1,7 @@
 import { NS } from '@ns';
-import { HackingModule } from './hacking/hackingModule';
-import { ScriptNetscriptPort } from './ports';
-import { ScriptPortCommunication } from './hacking/constants';
+import { HackingModule } from '/hacking/hackingModule';
+import { ScriptNetscriptPort } from '/ports';
+import { ScriptPortCommunication } from '/hacking/constants';
 
 /**
  * Handles RAM management
@@ -10,8 +10,8 @@ import { ScriptPortCommunication } from './hacking/constants';
 export async function main(ns: NS) {
     ns.disableLog('ALL');
 
-    const scriptsToFire = [
-        'gang.js',
+    const scriptsToFire: string[] = [
+        //'gang.js',
         //
     ];
 
@@ -25,9 +25,12 @@ export async function main(ns: NS) {
 
     const hackingModule = new HackingModule(ns);
 
+    ns.tprint('Initialized');
+
     while (true) {
-        const nextRun = hackingModule.manageQueue();
-        hackingModule.refill();
-        await ns.sleep(Math.max(1, nextRun));
+        const sleepTime = hackingModule.manageQueue(ns);
+        //ns.tprint(`Next run in ${sleepTime}ms`);
+        //hackingModule.refill();
+        await ns.sleep(Math.max(1, sleepTime));
     }
 }

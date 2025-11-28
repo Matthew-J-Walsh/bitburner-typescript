@@ -5,7 +5,7 @@ const purchasedServerPrefix = 'pserv';
 
 export class ServerMoneyUtils {
     /** Buys servers with the money given */
-    public purchaseServers(ns: NS, allowedMoney: number) {
+    public static purchaseServers(ns: NS, allowedMoney: number) {
         if (allowedMoney > ns.getPlayer().money) throw new Error('WTF moment');
 
         let purchasedServers = ns.getPurchasedServers();

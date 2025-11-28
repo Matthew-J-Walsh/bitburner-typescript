@@ -148,6 +148,10 @@ export class IntervalTimeline<T> {
         }
     }
 
+    get getLast(): StateInterval<T> | undefined {
+        return this.intervals[this.intervals.length - 1];
+    }
+
     /** For debugging / visibility */
     getAllIntervals(): readonly StateInterval<T>[] {
         return this.intervals;

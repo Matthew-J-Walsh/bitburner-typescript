@@ -1,4 +1,4 @@
-import { NetscriptPort, NS, ScriptArg, Server } from '@ns';
+import { NetscriptPort, NS, RunOptions, ScriptArg, Server } from '@ns';
 import {
     ProcessID,
     ActiveScript,
@@ -42,17 +42,75 @@ export class RamManagementModule extends ServerUtilityModule {
     private netscriptPort!: NetscriptPort;
     /** Need to refill */
     private needToRefill: boolean = true;
+    /** Total server ram avaiable to us */
+    protected totalServerRam!: number;
 
     constructor(protected ns: NS) {
         super(ns);
         this.netscriptPort = this.ns.getPortHandle(ScriptNetscriptPort);
+        this.updateRamAvailability();
     }
 
-    public initialQueue(): void {
+    protected initialQueue(): void {
         super.initialQueue();
         this.enqueue({
+            name: 'manageActiveScripts',
             time: Date.now(),
             fn: this.manageActiveScripts.bind(this),
+        });
+        this.enqueue({
+            name: 'updateRamAvailability',
+            time: Date.now() + 30_000,
+            fn: this.updateRamAvailability.bind(this),
+        });
+    }
+
+    /**
+     * Updates all the server changes
+     */
+    updateRamAvailability() {
+        const thisScript = this.ns.getRunningScript()!;
+        this.ourServers.forEach((server) => {
+            if (!this.priorityRamSpaceUsed.getByKey(server.hostname)) {
+                if (server.hostname === thisScript.server) {
+                    this.priorityRamSpaceUsed.insert({
+                        hostname: server.hostname,
+                        availableRam: server.maxRam - thisScript.ramUsage,
+                        totalRam: server.maxRam - thisScript.ramUsage,
+                    });
+                } else {
+                    this.priorityRamSpaceUsed.insert({
+                        hostname: server.hostname,
+                        availableRam: server.maxRam,
+                        totalRam: server.maxRam,
+                    });
+                }
+            } else {
+                const difference =
+                    server.maxRam -
+                    this.priorityRamSpaceUsed.getByKey(server.hostname)!
+                        .totalRam;
+                if (difference != 0) {
+                    this.priorityRamSpaceUsed.getByKey(
+                        server.hostname,
+                    )!.totalRam += difference;
+                    this.priorityRamSpaceUsed.getByKey(
+                        server.hostname,
+                    )!.availableRam += difference;
+                    this.priorityRamSpaceUsed.update(server.hostname);
+                }
+            }
+        });
+        this.totalServerRam =
+            Array.from(this.ourServers.values()).reduce(
+                (acc, server) => acc + server.maxRam,
+                0,
+            ) - this.ns.ramOverride();
+
+        this.enqueue({
+            name: 'updateRamAvailability',
+            time: Date.now() + 30_000,
+            fn: this.updateRamAvailability.bind(this),
         });
     }
 
@@ -92,6 +150,17 @@ export class RamManagementModule extends ServerUtilityModule {
         return res[0].pid;
     }
 
+    private exec(
+        script: string,
+        hostname: string,
+        threadOrOptions?: number | RunOptions | undefined,
+        ...args: ScriptArg[]
+    ): number {
+        //if (!this.ns.ls(hostname, script).includes(script))
+        this.ns.scp(script, hostname);
+        return this.ns.exec(script, hostname, threadOrOptions, ...args);
+    }
+
     /**
      * Fires off a new script with priority.
      * @param script
@@ -108,6 +177,10 @@ export class RamManagementModule extends ServerUtilityModule {
         endTime: Time,
         ...args: ScriptArg[]
     ): ActiveScript[] | undefined {
+        if (threads <= 0) {
+            this.ns.tprint(`${script} asking for ${threads} threads`);
+            return;
+        }
         const coreEffected = coreEffectedScripts.includes(script);
         const neededRam = this.ns.getScriptRam(script) * threads;
         const newScripts: ActiveScript[] = [];
@@ -117,19 +190,20 @@ export class RamManagementModule extends ServerUtilityModule {
             coreEffected,
         );
         for (let [server, fractures] of requestedRam) {
-            if (coreEffected)
+            if (!fracturable) fractures = threads;
+            if (false && coreEffected) {
                 fractures = Math.ceil(
                     fractures / (1 + (server.cpuCores - 1) / 16),
                 );
-            const pid = this.ns.exec(
-                script,
-                server.hostname,
-                fractures,
-                ...args,
-            );
+            }
+            if (fractures === 0)
+                throw new Error(
+                    `0 fracture size: ${script}, ${server.hostname}, ${threads} -> ${fractures}, ${neededRam}\n${this.ns.getServerMaxRam(server.hostname) - this.ns.getServerUsedRam(server.hostname)}`,
+                );
+            const pid = this.exec(script, server.hostname, fractures, ...args);
             if (pid === 0) {
                 throw new Error(
-                    `Fire failed after aquiring server: ${script}, ${server.hostname}, ${fractures}, ${neededRam}`,
+                    `Fire failed after aquiring server: ${script}, ${server.hostname}, ${fractures}, ${neededRam}\n${this.ns.getServerMaxRam(server.hostname) - this.ns.getServerUsedRam(server.hostname)}`,
                 );
             }
             const ascript = {
@@ -223,8 +297,8 @@ export class RamManagementModule extends ServerUtilityModule {
 
             if (threadOnServer === 0) continue;
 
-            //this.ns.tprint(`${script}, ${hostname}, ${threads}, ${args}`);
-            const pid = this.ns.exec(script, hostname, threadOnServer, ...args);
+            //this.ns.tprint(`${script}, ${hostname}, ${threads}, ${args}`);)
+            const pid = this.exec(script, hostname, threadOnServer, ...args);
             if (pid === 0) {
                 this.ns.tprint(
                     `Fill failed on an open server: ${script}, ${hostname}, ${threadOnServer}, ${args}, ${server.maxRam} - ${this.ns.getServerUsedRam(hostname)}`,
@@ -260,22 +334,27 @@ export class RamManagementModule extends ServerUtilityModule {
     ): [Server, number][] {
         let servers: [Server, number][] = [];
         let i = 0;
-        while (neededRam > 0) {
+        while (neededRam > 1.6) {
             const result = this.priorityRamSpaceUsed.findNext(fractureRam, i);
             if (result) {
                 const server = this.ourServers.get(result.hostname)!;
                 this.ns
-                    .ps()
+                    .ps(result.hostname)
                     .filter(
                         (processInfo) =>
                             processInfo.filename === scriptMapping.share ||
                             processInfo.filename === scriptMapping.stanek,
                     )
                     .forEach((processInfo) => this.ns.kill(processInfo.pid));
-                servers.push([
-                    server,
+                const fractures = Math.min(
+                    Math.ceil(neededRam / fractureRam),
                     Math.floor(result.availableRam / fractureRam),
-                ]);
+                );
+                //this.ns.tprint(`${server.hostname}: ${fractures}`);
+                if (fractures > 0) {
+                    servers.push([server, fractures]);
+                    neededRam = neededRam - fractures * fractureRam;
+                }
             } else {
                 this.ns.tprint(
                     `Failed to find ram: ${neededRam}, ${fractureRam}`,
@@ -283,6 +362,7 @@ export class RamManagementModule extends ServerUtilityModule {
                 return [];
             }
             i += 1;
+            if (i > 1000) throw new Error('Infinite loop???');
         }
         this.needToRefill = true;
         return servers;
@@ -332,6 +412,7 @@ export class RamManagementModule extends ServerUtilityModule {
         }
 
         this.enqueue({
+            name: 'manageActiveScripts',
             time:
                 (this.trackedScriptHeap.peek()?.endTime ?? Date.now() + 500) +
                 100,

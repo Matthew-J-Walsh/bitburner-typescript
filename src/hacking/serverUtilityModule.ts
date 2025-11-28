@@ -1,8 +1,8 @@
 import { NS, Server } from '@ns';
 import { Heap } from '/lib/heap';
-import { purchasedServerPrefix, scriptMapping } from '/hacking/constants';
+import { purchasedServerPrefix } from '/hacking/constants';
 import { LoggingUtility } from '/lib/loggingUtils';
-import { QueueManagementModule } from './queueManagementModule';
+import { QueueManagementModule } from '/hacking/queueManagementModule';
 
 type PurchasedServer = {
     hostname: string;
@@ -34,8 +34,6 @@ export class ServerUtilityModule extends QueueManagementModule {
     );
     /** List of crackers */
     private crackers!: { file: string; fn: (host: string) => boolean }[];
-    /** Reserved ram */
-    private reservedRam!: number;
     /** Logger */
     public logger!: LoggingUtility;
 
@@ -51,10 +49,11 @@ export class ServerUtilityModule extends QueueManagementModule {
         this.fullServerScan();
     }
 
-    public initialQueue(): void {
+    protected initialQueue(): void {
         super.initialQueue();
         this.enqueue({
-            time: Date.now() + 300_000,
+            name: 'rootServers',
+            time: Date.now(),
             fn: this.rootServers.bind(this),
         });
     }
@@ -134,6 +133,7 @@ export class ServerUtilityModule extends QueueManagementModule {
         );
 
         this.enqueue({
+            name: 'rootServers',
             time: Date.now() + 300_000,
             fn: this.rootServers.bind(this),
         });
@@ -160,6 +160,7 @@ export class ServerUtilityModule extends QueueManagementModule {
 
     /** Buys the least expensive RAM */
     public purchaseServer(): boolean {
+        return false;
         if (this.purchasedServers.size < this.ns.getPurchasedServerLimit()) {
             const hostname = this.ns.purchaseServer(purchasedServerPrefix, 256);
             if (hostname === '') {
@@ -206,6 +207,7 @@ export class ServerUtilityModule extends QueueManagementModule {
      * @returns [ram gained, cost]
      */
     public cheapestPurchasableServer(): [number, number] {
+        return [0, Infinity];
         if (this.purchasedServers.size < this.ns.getPurchasedServerLimit()) {
             return [256, this.ns.getPurchasedServerCost(256)];
         } else {
@@ -230,18 +232,6 @@ export class ServerUtilityModule extends QueueManagementModule {
     /** Upgrades the home cores */
     public upgradeHomeCores(): void {}
 
-    /** Total available RAM
-     * TODO: Speed me up
-     */
-    get totalServerRam(): number {
-        return (
-            Array.from(this.ourServers.values()).reduce(
-                (acc, server) => acc + server.maxRam,
-                0,
-            ) - this.reservedRam
-        );
-    }
-
     //get maximumServerRam()
 
     /**
@@ -258,7 +248,6 @@ export class ServerUtilityModule extends QueueManagementModule {
 
     public log(): Record<string, any> {
         return {
-            totalRam: this.totalServerRam,
             serversLength: this.servers.size,
             ourServersLength: this.ourServers.size,
             ourHostnamesLength: this.ourHostnames.length,

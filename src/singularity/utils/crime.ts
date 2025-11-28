@@ -2,6 +2,7 @@ import { CrimeType, NS } from '@ns';
 import { Action, Check, CrimeTimes } from '../constants';
 import { DefaultFunctions } from './defaults';
 import { Story } from './story';
+import { SleeveFunctions } from './sleeves';
 
 export class CrimeFunctions extends DefaultFunctions {
     public static karamStory(ns: NS, karma = -54000): Story {
@@ -86,7 +87,49 @@ export class CrimeFunctions extends DefaultFunctions {
                 )
             )
                 ns.singularity.commitCrime(best.crime);
+
+            CrimeFunctions.sleeveFarmMoney(ns);
             await ns.sleep(CrimeTimes[best.crime]);
         };
+    }
+
+    public static sleeveFarmMoney(ns: NS) {
+        for (let i = 0; i < ns.sleeve.getNumSleeves(); i++) {
+            if (SleeveFunctions.sleeveBlock(ns, i)) continue;
+
+            const sleeve = ns.sleeve.getSleeve(i);
+
+            const best: { crime: CrimeType; value: number } = Object.entries(
+                CrimeTimes,
+            ).reduce(
+                (best, [crime, time]) => {
+                    if (time > 1e4) return best;
+                    const gains = ns.formulas.work.crimeGains(
+                        sleeve,
+                        crime as CrimeType,
+                    );
+                    const chance = ns.formulas.work.crimeSuccessChance(
+                        sleeve,
+                        crime as CrimeType,
+                    );
+                    const value = (chance * gains.money) / time;
+
+                    if (value > best.value)
+                        return { crime: crime as CrimeType, value: value };
+                    return best;
+                },
+                { crime: 'Shoplift' as CrimeType, value: 0 },
+            );
+
+            const currentWork = ns.sleeve.getTask(i);
+            if (
+                !currentWork ||
+                !(
+                    currentWork.type === 'CRIME' &&
+                    currentWork.crimeType === best.crime
+                )
+            )
+                ns.sleeve.setToCommitCrime(i, best.crime);
+        }
     }
 }
