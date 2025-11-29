@@ -266,7 +266,7 @@ export class BladeburnerModule {
                 if (level > 89) return 0;
                 if (level > 49) return 1; // This is the critical point for Overclock
                 return (
-                    (10 * ((1 - level * 0.01) / (1 - (level + 1) * 0.01) - 1)) /
+                    (1 * ((1 - level * 0.01) / (1 - (level + 1) * 0.01) - 1)) /
                     cost
                 );
             case 'Reaper':

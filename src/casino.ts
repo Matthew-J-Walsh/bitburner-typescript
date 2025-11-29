@@ -6,60 +6,28 @@ import React from 'react';
 // ============================================================================
 const MIN_BET = 1;
 const MAX_BET = 1e7; // up to casino cap
+const DEBUG_MODE = true;
 
 // ============================================================================
 // RNG IMPLEMENTATION (WHRNG) — identical to Bitburner implementation
 // ============================================================================
-export class SeedCandidate {
-    private s1 = 0;
-    private s2 = 0;
-    private s3 = 0;
+function step(values: [number, number, number]): [number, number, number] {
+    return [
+        (171 * values[0]) % 30269,
+        (172 * values[1]) % 30307,
+        (170 * values[2]) % 30323,
+    ];
+}
 
-    constructor(initialState: number) {
-        this.s1 = initialState;
-        this.s2 = initialState;
-        this.s3 = initialState;
-    }
-
-    private step(): void {
-        this.s1 = (171 * this.s1) % 30269;
-        this.s2 = (172 * this.s2) % 30307;
-        this.s3 = (170 * this.s3) % 30323;
-    }
-
-    private random(): number {
-        this.step();
-        return (
-            (this.s1 / 30269.0 + this.s2 / 30307.0 + this.s3 / 30323.0) % 1.0
-        );
-    }
-
-    // Returns roulette outcome 0–36
-    get next(): number {
-        return Math.floor(this.random() * 37);
-    }
-
-    // Check if this seed is still viable
-    // bet = our predicted outcome
-    // observed = what the casino actually gave
-    public attemptEliminate(bet: number, observed: number): boolean {
-        while (true) {
-            const value = this.next;
-
-            if (value === observed) {
-                // Could match exactly: valid seed
-                return true;
-            }
-
-            if (value === bet) {
-                // Forced-loss path: step again and check
-                continue;
-            }
-
-            // Neither the observed value nor the bet: impossible seed
-            return false;
-        }
-    }
+function nextRandom(values: [number, number, number]): number {
+    let nextValues = step(values);
+    return Math.floor(
+        ((nextValues[0] / 30269 +
+            nextValues[1] / 30307 +
+            nextValues[2] / 30323) %
+            1) *
+            37,
+    );
 }
 
 // ============================================================================
@@ -73,34 +41,50 @@ async function placeBet(
 ): Promise<number> {
     await setText(
         ns,
-        getByXpath(ns, doc, "//input[@type='number']"),
+        await getByXpath(ns, doc, "//input[@type='number']"),
         `${amount}`,
     );
 
-    await click(ns, getByXpath(ns, doc, `//table//button[text()='${guess}']`));
+    await click(
+        ns,
+        await getByXpath(ns, doc, `//table//button[text()='${guess}']`),
+    );
 
-    await ns.sleep(1100);
+    await ns.sleep(2100);
 
-    let value: string = (
-        (await getByXpath(
-            ns,
-            doc,
-            "(//button[contains(.,'Stop playing')]/following-sibling::h4)[1]",
-        )) as any
-    ).text();
+    let value: string = (await getByXpath(
+        ns,
+        doc,
+        "(//button[contains(.,'Stop playing')]/following-sibling::h4)[1]",
+    ))!.textContent!;
+
+    if (DEBUG_MODE) ns.print(value);
 
     // Must return the OBSERVED result (0–36)
     return parseInt(value.slice(0, -1));
 }
 
-async function click(ns: NS, button: any) {
+async function click(ns: NS, button: Node | null) {
     if (!button) throw new Error('Only send click confirmed to exist buttons');
+
+    if (DEBUG_MODE) {
+        ns.print(`Tag: ${button.nodeName}`);
+        ns.print(`Tag: ${button.nodeType}`);
+        ns.print(`Tag: ${button.nodeValue}`);
+        ns.print(`Tag: ${button.textContent}`);
+    }
 
     await ns.sleep(10);
 
-    let fnOnClick = button[Object.keys(button)[1]].onClick; // Figure out what I do lamo
+    let fnOnClick =
+        button[
+            // @ts-ignore
+            Object.keys(button).find((key) => key.startsWith('__reactProps'))
+        ].onClick;
+    //let fnOnClick = button[Object.keys(button)[1]].onClick; // Figure out what I do lamo
 
     if (!fnOnClick)
+        // @ts-ignore
         throw new Error(`${button.text()} missing an onClick method`);
 
     await fnOnClick({ isTrusted: true }); // We can make it trusted by willing it so!
@@ -108,23 +92,44 @@ async function click(ns: NS, button: any) {
     await ns.sleep(10);
 }
 
-async function setText(ns: NS, input: any, text: string) {
+async function setText(ns: NS, input: Node | null, text: string) {
     if (!input)
         throw new Error('Only send setText confirmed to exist textboxes');
 
     await ns.sleep(10);
 
-    let fnOnChange = input[Object.keys(input)[1]].onChange;
+    if (DEBUG_MODE) {
+        ns.print(`Tag: ${input.nodeName}`);
+        ns.print(`Tag: ${input.nodeType}`);
+        ns.print(`Tag: ${input.nodeValue}`);
+        ns.print(`Tag: ${input.textContent}`);
+    }
+
+    // @ts-ignore
+    let fnOnChange =
+        input[
+            // @ts-ignore
+            Object.keys(input).find((key) => key.startsWith('__reactProps'))
+        ].onChange;
 
     if (!fnOnChange)
+        // @ts-ignore
         throw new Error(`${input.text()} missing an onChange method`);
 
-    await fnOnChange({ isTrusted: true, target: { value: text } }); // We can make it trusted by willing it so!
+    //ns.print(text);
+    //ns.print({ value: text });
+    //ns.print({ isTrusted: true, currentTarget: { value: text } });
+
+    await fnOnChange({ isTrusted: true, currentTarget: { value: text } }); // We can make it trusted by willing it so!
 
     await ns.sleep(10);
 }
 
-async function getByXpath(ns: NS, doc: Document, xpath: string) {
+async function getByXpath(
+    ns: NS,
+    doc: Document,
+    xpath: string,
+): Promise<Node | null> {
     for (let i = 0; i < 10; i++) {
         try {
             return doc.evaluate(
@@ -142,41 +147,6 @@ async function getByXpath(ns: NS, doc: Document, xpath: string) {
 }
 
 // ============================================================================
-// EXPLOITATION PHASE – WE HAVE EXACT SEED, NOW FARM MONEY
-// ============================================================================
-export async function exploitWithSeed(
-    ns: NS,
-    doc: Document,
-    seed: SeedCandidate,
-): Promise<void> {
-    while (true) {
-        // 1. Predict the next outcome
-        let predicted = seed.next;
-
-        // 2. Bet maximum
-        const observed = await placeBet(ns, doc, predicted, MAX_BET);
-
-        if (observed === predicted) {
-            // WIN: Seed has already advanced correctly in-place
-            continue;
-        }
-
-        // 3. Loss: forced-advance known seed until it reaches observed
-        // If it NEVER reaches observed — logic error
-        let chained = predicted;
-        while (predicted === chained) {
-            chained = seed.next;
-        }
-
-        if (chained !== observed) {
-            throw new Error(
-                'Seed desync: predicted path never reached observed value.',
-            );
-        }
-    }
-}
-
-// ============================================================================
 // MAIN Function
 // ============================================================================
 export async function main(ns: NS) {
@@ -187,7 +157,7 @@ export async function main(ns: NS) {
     //ns.singularity.goToLocation("Iker Molina Casino")
     await click(
         ns,
-        getByXpath(
+        await getByXpath(
             ns,
             doc,
             "//div[(@role = 'button') and (contains(., 'City'))]",
@@ -196,33 +166,83 @@ export async function main(ns: NS) {
 
     await click(
         ns,
-        getByXpath(ns, doc, "//span[@aria-label = 'Iker Molina Casino']"),
+        await getByXpath(ns, doc, "//span[@aria-label = 'Iker Molina Casino']"),
     );
 
     await click(
         ns,
-        getByXpath(ns, doc, "//button[contains(text(), 'roulette')]"),
+        await getByXpath(ns, doc, "//button[contains(text(), 'roulette')]"),
     );
 
-    ns.tprint('Starting discovery...');
+    await ns.sleep(1_000);
 
-    let candidates = Array.from(
-        { length: 30000 },
-        (_, i) => new SeedCandidate(i),
-    );
+    if (DEBUG_MODE) {
+        ns.print(doc);
+        ns.print(doc.evaluate);
+        let result = doc.evaluate(
+            "//div[(@role = 'button') and (contains(., 'City'))]",
+            doc,
+            null,
+            XPathResult.FIRST_ORDERED_NODE_TYPE,
+            null,
+        );
+        let node = result.singleNodeValue;
 
-    while (candidates.length > 1) {
-        ns.tprint(`Remaining candidates: ${candidates.length}`);
-
-        // Place a dummy bet that forces loss
-        const observed = await placeBet(ns, doc, 0, MIN_BET);
-
-        candidates = candidates.filter((c) => c.attemptEliminate(1, observed));
+        if (node) {
+            ns.print(`Tag: ${node.nodeName}`);
+            ns.print(`Tag: ${node.nodeType}`);
+            ns.print(`Tag: ${node.nodeValue}`);
+            ns.print(`Tag: ${node.textContent}`);
+            ns.print(
+                // @ts-ignore
+                `Data: ${node[Object.keys(node).find((key) => key.startsWith('__reactProps'))].onClick}`,
+            );
+            // @ts-ignore
+        }
     }
 
-    const seed = candidates[0];
+    let element = (await getByXpath(
+        ns,
+        doc,
+        "(//button[contains(.,'Stop playing')]/following-sibling::h4)[1]",
+    ))!;
 
-    ns.tprint('Seed discovered. Exploiting...');
+    ns.print(`Tag: ${element.nodeName}`);
+    ns.print(`Tag: ${element.nodeType}`);
+    ns.print(`Tag: ${element.nodeValue}`);
+    ns.print(`Tag: ${element.textContent}`);
 
-    await exploitWithSeed(ns, doc, seed);
+    let fiberKey = Object.keys(element).find((key) =>
+        key.startsWith('__reactFiber'),
+    );
+
+    // @ts-ignore
+    let fiber = element[fiberKey];
+
+    /**
+     * Ok to explain how to do this:
+     * Basically we want to find one of the html elements created, then look at its reactFiber
+     * From there we can go up the returns to find an "interesting" memoizedProps
+     * In the case of our good friend roulette,
+     * we can easily find the s1,s2, and s3 for the random number generator
+     *
+     * In the case of blackjack, the deck isn't in a useState, so we look at stateNode
+     */
+    let state = fiber.return.return.return.memoizedState.baseState;
+    let values: [number, number, number];
+    let guess: number;
+    for (let i = 0; i < 1000; i++) {
+        if (
+            await getByXpath(ns, doc, "//span[contains(.,'Alright cheater')]")
+        ) {
+            ns.print('YAY WE WIN, GET FUCKED!');
+            break;
+        }
+        values = [state.s1, state.s2, state.s3];
+        guess = nextRandom(values);
+        ns.print(`Values: ${values}, Guess: ${guess}`);
+        await placeBet(ns, doc, guess, MAX_BET);
+    }
+
+    return;
 }
