@@ -195,7 +195,7 @@ export class BladeburnerModule {
                     this.ns.bladeburner.getActionEstimatedSuccessChance(
                         type,
                         name,
-                    )[0] >= 1
+                    )[0] >= (type === 'Black Operations' ? 1 : 0.85)
                 )
                     return this.startAction(type, name);
         }
