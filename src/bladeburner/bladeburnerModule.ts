@@ -7,7 +7,7 @@ import {
     CityName,
     NS,
 } from '@ns';
-import { Cities } from '/bladeburner/constants';
+import { Cities, minimalSuccessChance } from '/bladeburner/constants';
 import { LoggingUtility } from '/lib/loggingUtils';
 
 /**
@@ -27,6 +27,20 @@ export class BladeburnerModule {
     nextUpdateTime: number = 0;
     /** Next action completion time for sleeves */
     sleeveNextUpdateTime: Record<number, number> = {};
+    /** Last action and chance */
+    lastAction:
+        | [
+              (
+                  | BladeburnerActionType
+                  | 'General'
+                  | 'Contracts'
+                  | 'Operations'
+                  | 'Black Operations'
+              ),
+              BladeburnerActionName,
+              number,
+          ]
+        | undefined;
 
     constructor(protected ns: NS) {
         this.logger = new LoggingUtility(
@@ -185,22 +199,70 @@ export class BladeburnerModule {
             );
             this.ns.bladeburner.setActionAutolevel(type, name, true);
         }
+        const bestCity = this.getBestCity(type, name);
+        if (bestCity === 'None') return false;
+
+        this.ns.bladeburner.switchCity(bestCity);
+
+        const chance = this.ns.bladeburner.getActionEstimatedSuccessChance(
+            type,
+            name,
+        )[0];
+        if (
+            chance >= (type === 'Black Operations' ? 1 : minimalSuccessChance)
+        ) {
+            this.lastAction = [type, name, chance];
+            return this.startAction(type, name);
+        }
+
+        return false;
+    }
+
+    getBestCity(
+        type:
+            | BladeburnerActionType
+            | 'General'
+            | 'Contracts'
+            | 'Operations'
+            | 'Black Operations',
+        name: BladeburnerActionName,
+    ):
+        | CityName
+        | 'Aevum'
+        | 'Chongqing'
+        | 'Sector-12'
+        | 'New Tokyo'
+        | 'Ishima'
+        | 'Volhaven'
+        | 'None' {
+        let bestValue = 0;
+        let bestCity:
+            | CityName
+            | 'Aevum'
+            | 'Chongqing'
+            | 'Sector-12'
+            | 'New Tokyo'
+            | 'Ishima'
+            | 'Volhaven'
+            | 'None' = 'None';
         for (let city of Cities) {
             this.ns.bladeburner.switchCity(city as CityName);
             if (
                 name !== 'Raid' ||
-                this.ns.bladeburner.getCityCommunities(city as CityName) >= 1
-            )
-                if (
+                this.ns.bladeburner.getCityCommunities(city as CityName) >= 0
+            ) {
+                const chance =
                     this.ns.bladeburner.getActionEstimatedSuccessChance(
                         type,
                         name,
-                    )[0] >= (type === 'Black Operations' ? 1 : 0.85)
-                )
-                    return this.startAction(type, name);
+                    )[0];
+                if (chance > bestValue) {
+                    bestValue = chance;
+                    bestCity = city;
+                }
+            }
         }
-
-        return false;
+        return bestCity;
     }
 
     //public async nextUpdate(): Promise<any> {
@@ -248,6 +310,7 @@ export class BladeburnerModule {
             (weight *
                 ((1 + (level + 1) * percent) / (1 + level * percent) - 1)) /
             cost;
+        let stamina: number, maxStamina: number;
         switch (name) {
             case "Blade's Intuition":
                 return getValue(1.0, 0.03);
@@ -264,7 +327,16 @@ export class BladeburnerModule {
                 return getValue(0.1, 0.04);
             case 'Overclock':
                 if (level > 89) return 0;
-                if (level > 49) return 1; // This is the critical point for Overclock
+                [stamina, maxStamina] = this.ns.bladeburner.getStamina();
+                if (
+                    this.lastAction &&
+                    this.lastAction[1] === 'Assassination' &&
+                    this.lastAction[2] >= minimalSuccessChance + 0.05 &&
+                    stamina > 0.7 * maxStamina
+                )
+                    return 1;
+                //if (level > 49) return 1;
+                // 49 is the critical point for Overclock
                 return (
                     (1 * ((1 - level * 0.01) / (1 - (level + 1) * 0.01) - 1)) /
                     cost
@@ -278,7 +350,8 @@ export class BladeburnerModule {
                     return getValue(0.3, 0.04);
                 return getValue(0.05, 0.05);
             case "Cyber's Edge":
-                return getValue(0.1, 0.02); //TODO come back to me, im stamina
+                [stamina, maxStamina] = this.ns.bladeburner.getStamina();
+                return getValue(stamina < 0.7 * maxStamina ? 1 : 0.5, 0.02); //TODO come back to me, im stamina
             case 'Hands of Midas':
                 return getValue(0.0, 0.04);
             case 'Hyperdrive':
@@ -356,7 +429,7 @@ export class BladeburnerModule {
 
             // 3-.5. Reduce shock
             const sleeve = this.ns.sleeve.getSleeve(i);
-            if (sleeve.shock > 0.5) {
+            if (sleeve.shock > 50) {
                 const currentTask = this.ns.sleeve.getTask(i);
                 this.sleeveNextUpdateTime[i] = Date.now() + 60_000;
                 if (!currentTask || currentTask.type !== 'RECOVERY')

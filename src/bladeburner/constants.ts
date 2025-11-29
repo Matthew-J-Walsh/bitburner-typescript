@@ -11,6 +11,8 @@ export const Cities: (
     | 'Volhaven'
 )[] = ['Aevum', 'Chongqing', 'Sector-12', 'New Tokyo', 'Ishima', 'Volhaven'];
 
+export const minimalSuccessChance = 0.7;
+
 //
 
 //
