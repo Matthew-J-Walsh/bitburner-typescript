@@ -351,7 +351,7 @@ export class BladeburnerModule {
                 return getValue(0.05, 0.05);
             case "Cyber's Edge":
                 [stamina, maxStamina] = this.ns.bladeburner.getStamina();
-                return getValue(stamina < 0.7 * maxStamina ? 1 : 0.5, 0.02); //TODO come back to me, im stamina
+                return getValue(stamina < 0.7 * maxStamina ? 1 : 0.1, 0.02); //TODO come back to me, im stamina
             case 'Hands of Midas':
                 return getValue(0.0, 0.04);
             case 'Hyperdrive':
