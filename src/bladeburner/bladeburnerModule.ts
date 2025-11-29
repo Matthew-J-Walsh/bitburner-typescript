@@ -280,7 +280,7 @@ export class BladeburnerModule {
             case "Cyber's Edge":
                 return getValue(0.1, 0.02); //TODO come back to me, im stamina
             case 'Hands of Midas':
-                return getValue(0.005, 0.04);
+                return getValue(0.0, 0.04);
             case 'Hyperdrive':
                 return getValue(0.1, 0.1);
             default:

@@ -1,7 +1,6 @@
 import { GangMemberInfo, NS } from '@ns';
 import { GangUtilityFunctions } from './gangUtilityModule';
 import { randomString } from '/gang/constants';
-import { PurchaseEvaluation } from '/core/money/moneyModule';
 import { LoggingUtility } from '/lib/loggingUtils';
 
 /**
@@ -174,7 +173,7 @@ export class GangModule {
     }
 
     /** The best upgrade avaiable to our gang */
-    private get bestUpgrade(): {
+    get bestUpgrade(): {
         member: string;
         name: string;
         value: number;
@@ -209,28 +208,6 @@ export class GangModule {
                 ...GangUtilityFunctions.bestUpgrade(this.ns, gangMembers[0]),
             },
         );
-    }
-
-    /**
-     * Best upgrade externally (for money generation).
-     * TODO: We do something weird here, where we rank purchases by a fixed formula but return the effect
-     */
-    get bestUpgradeExternal(): PurchaseEvaluation {
-        let bestUpgrade = this.bestUpgrade;
-        let income = this.ns.formulas.gang.moneyGain(
-            this.ns.gang.getGangInformation(),
-            this.ns.gang.getMemberInformation(bestUpgrade.member),
-            this.ns.gang.getTaskStats('Human Trafficking'),
-        ); //TODO, do we need a multiplier?
-        return {
-            income: income * this.bestUpgrade.effect,
-            cost: bestUpgrade.cost,
-            buy: () =>
-                this.ns.gang.purchaseEquipment(
-                    bestUpgrade.member,
-                    bestUpgrade.name,
-                ),
-        };
     }
 
     /** Temporary before singularity: how much respect to obtain */

@@ -17,9 +17,9 @@ export async function main(ns: NS) {
     while (true) {
         gangModule.manage();
         while (true) {
-            const bestUpgrade = gangModule.bestUpgradeExternal;
+            const bestUpgrade = gangModule.bestUpgrade;
             if (bestUpgrade.cost < ns.getPlayer().money) {
-                bestUpgrade.buy();
+                ns.gang.purchaseEquipment(bestUpgrade.member, bestUpgrade.name);
             } else {
                 break;
             }
