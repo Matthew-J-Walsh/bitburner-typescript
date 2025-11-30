@@ -1,6 +1,6 @@
-import { CrimeType } from '@ns';
+import { CompanyName, CrimeType, FactionName, JobField } from '@ns';
 
-export const defaultSleepTime = 5_000;
+export const defaultSleepTime = 60_000;
 
 export const multipleAugMultiplier = 1.9; //BN11
 
@@ -31,3 +31,50 @@ export const CrimeTimes: Record<CrimeType, number> = {
     Assassination: 300e3,
     Heist: 600e3,
 };
+
+export interface FactionReset {
+    type: 'faction';
+    faction: FactionName;
+    augments: string[];
+    favor: number;
+}
+
+export interface NeuroFluxReset {
+    type: 'neuroflux';
+    target: number;
+    count?: number;
+    faction?: FactionName;
+}
+
+export interface CompanyPartialReset {
+    type: 'company';
+    companyName: CompanyName;
+    field: JobField;
+}
+
+export interface GraftingReset {
+    type: 'grafting';
+    augName: string;
+}
+
+export interface GraftingPartialReset {
+    type: 'graftingP';
+    augName: string;
+}
+
+export type PartialReset =
+    | CompanyPartialReset
+    | GraftingPartialReset
+    | FactionReset;
+
+export interface PiecewiseReset {
+    type: 'piecewise';
+    partials: PartialReset[];
+    reset: boolean;
+}
+
+export type Reset =
+    | NeuroFluxReset
+    | FactionReset
+    | GraftingReset
+    | PiecewiseReset;

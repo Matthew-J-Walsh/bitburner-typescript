@@ -1,11 +1,5 @@
 import { FactionName, FactionWorkType, NS } from '@ns';
-import {
-    Action,
-    Check,
-    defaultSleepTime,
-    multipleAugMultiplier,
-    startUpScript,
-} from '../constants';
+import { Action, Check, defaultSleepTime } from '../constants';
 import { DefaultFunctions } from './defaults';
 import { Story } from './story';
 import { SleeveFunctions } from './sleeves';
@@ -31,7 +25,8 @@ export class FactionFunctions extends DefaultFunctions {
 
         return new Story(
             ns,
-            FactionFunctions.invitedToFaction(ns, faction),
+            FactionFunctions.invitedToFaction(ns, faction) ||
+                FactionFunctions.inFaction(ns, faction),
             async () => {
                 ns.singularity.joinFaction(faction);
                 await FactionFunctions.workForFaction(
@@ -63,6 +58,20 @@ export class FactionFunctions extends DefaultFunctions {
     ): Check {
         return () => {
             return ns.singularity.getFactionRep(faction) > target;
+        };
+    }
+
+    public static aboveFactionFavor(
+        ns: NS,
+        faction: FactionName,
+        target: number,
+    ): Check {
+        return () => {
+            return (
+                ns.singularity.getFactionFavorGain(faction) +
+                    ns.singularity.getFactionFavor(faction) >
+                target
+            );
         };
     }
 

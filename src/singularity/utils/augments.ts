@@ -1,76 +1,12 @@
 import { FactionName, NS } from '@ns';
-import { multipleAugMultiplier, startUpScript } from '../constants';
-import { Story } from './story';
+import { multipleAugMultiplier } from '../constants';
 import { DefaultFunctions } from './defaults';
 
 export class AugmentationFunctions extends DefaultFunctions {
-    public static augmentResetStory(
+    public static augmentPurchaseOrder(
         ns: NS,
-        augList: Partial<Record<FactionName, string[]>>,
-        homeComputerRam = false,
-    ): Story {
-        const allAugs = Object.values(augList).flat();
-        //we need to filter out neuroflux governer level requests
-        const orderedAugs: string[] =
-            AugmentationFunctions.augmentPurchaseOrder(ns, allAugs);
-
-        let multiplier = 1;
-        const cost = orderedAugs.reduce((total, augName) => {
-            multiplier *= multipleAugMultiplier;
-            return (
-                total +
-                (ns.singularity.getAugmentationBasePrice(augName) *
-                    multiplier) /
-                    multipleAugMultiplier
-            );
-        }, 0);
-
-        const augFactions: Record<string, FactionName> = Object.fromEntries(
-            Object.entries(augList).flatMap(([key, values]) =>
-                values.map((value) => [value, key as FactionName]),
-            ),
-        );
-
-        return new Story(
-            ns,
-            AugmentationFunctions.aboveMoney(ns, cost),
-            async () => {
-                orderedAugs.forEach((aug) => {
-                    if (
-                        !ns.singularity.purchaseAugmentation(
-                            augFactions[aug],
-                            aug,
-                        )
-                    )
-                        throw new Error('Error when buying augs!');
-                });
-                if (homeComputerRam) {
-                    while (ns.singularity.upgradeHomeRam()) continue;
-                    while (ns.singularity.upgradeHomeCores()) continue;
-                }
-                const highestFaction = Object.keys(augList).reduce(
-                    (best, faction) =>
-                        ns.singularity.getFactionRep(faction) > best.rep
-                            ? {
-                                  name: faction,
-                                  rep: ns.singularity.getFactionRep(faction),
-                              }
-                            : best,
-                    { name: Object.keys(augList)[0], rep: 0 },
-                ).name;
-                while (
-                    ns.singularity.purchaseAugmentation(
-                        highestFaction,
-                        'NeuroFlux Governor',
-                    )
-                )
-                    continue;
-                ns.singularity.installAugmentations(startUpScript);
-            },
-        );
-    }
-
-    private static augmentPurchaseOrder(ns: NS, augList: string[]): string[] {
+        augNames: string[],
+    ): [string[], number] {
         let bestOrder: string[] = [];
         let bestCost = Infinity;
 
@@ -96,29 +32,28 @@ export class AugmentationFunctions extends DefaultFunctions {
                     .every((prereq) => !remaining.has(prereq)),
             );
 
-            (bestOrder.length === augList.length ? bestOrder : augList).forEach(
-                (augName) => {
-                    if (remaining.has(augName)) {
-                        const newRemaining = new Set(remaining);
-                        newRemaining.delete(augName);
-                        backtrack(
-                            newRemaining,
-                            [...order, augName],
-                            currentCost +
-                                ns.singularity.getAugmentationBasePrice(
-                                    augName,
-                                ) *
-                                    currentMultiplier,
-                            currentMultiplier * multipleAugMultiplier,
-                        );
-                    }
-                },
-            );
+            (bestOrder.length === augNames.length
+                ? bestOrder
+                : augNames
+            ).forEach((augName) => {
+                if (remaining.has(augName)) {
+                    const newRemaining = new Set(remaining);
+                    newRemaining.delete(augName);
+                    backtrack(
+                        newRemaining,
+                        [...order, augName],
+                        currentCost +
+                            ns.singularity.getAugmentationBasePrice(augName) *
+                                currentMultiplier,
+                        currentMultiplier * multipleAugMultiplier,
+                    );
+                }
+            });
         }
 
-        backtrack(new Set(augList), [], 0, 1);
+        backtrack(new Set(augNames), [], 0, 1);
 
-        return bestOrder;
+        return [bestOrder, bestCost];
     }
 
     public static augmentRepHelper(
@@ -135,5 +70,9 @@ export class AugmentationFunctions extends DefaultFunctions {
                 ),
             ]),
         );
+    }
+
+    public static maxRepRequirement(ns: NS, augNames: string[]) {
+        return Math.max(...augNames.map(ns.singularity.getAugmentationRepReq));
     }
 }
